@@ -1,6 +1,6 @@
 /* Global background + text */
 QWidget {
-    background-color: #1e1e1e;
+    background-color:rgb(117, 36, 151);
     color: #f0f0f0;
     font-family: "Segoe UI", sans-serif;
     font-size: 14px;
@@ -102,57 +102,3 @@ QWidget[theme="light"] QHeaderView::section {
     background-color: #f0f0f0;
     color: #111;
 }
-
-/* =========================================================
-   Theme variants
-   The app sets: qApp.setProperty("theme", "<name>")
-   Qt style engine matches on: QWidget[theme="<name>"] { ... }
-   ========================================================= */
-
-/* ---------- DARK (default) ---------- */
-QWidget[theme="dark"] {
-    background: #121417;
-    color: #E7EAF0;
-}
-QWidget[theme="dark"] QGroupBox {
-    border: 1px solid #2A2F36;
-    margin-top: 10px;
-    border-radius: 6px;
-}
-QWidget[theme="dark"] QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 6px;
-    color: #C9D1D9;
-}
-QWidget[theme="dark"] QLineEdit,
-QWidget[theme="dark"] QTextEdit,
-QWidget[theme="dark"] QTextBrowser,
-QWidget[theme="dark"] QComboBox,
-QWidget[theme="dark"] QDateEdit {
-    background: #1A1E23;
-    border: 1px solid #2A2F36;
-    border-radius: 6px;
-    padding: 6px 8px;
-    selection-background-color: #2D6CDF;
-}
-QWidget[theme="dark"] QListWidget,
-QWidget[theme="dark"] QTableWidget {
-    background: #171B20;
-    border: 1px solid #2A2F36;
-    border-radius: 6px;
-}
-QWidget[theme="dark"] QHeaderView::section {
-    background: #1A1E23;
-    color: #C9D1D9;
-    border: 1px solid #2A2F36;
-    padding: 6px;
-}
-QWidget[theme="dark"] QPushButton {
-    background: #232A33;
-    border: 1px solid #2A2F36;
-    border-radius: 6px;
-    padding: 6px 10px;
-}
-QWidget[theme="dark"] QPushButton:hover { background: #2B3440; }
-QWidget[theme="dark"] QPushButton:pressed { background: #1E242C; }
