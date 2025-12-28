@@ -11,89 +11,36 @@ from PySide6.QtCore import Qt, QDate, QTime
 import sys
 import json
 
+# NEW
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QColorDialog
+
+# NEW: autosave + ids
+from PySide6.QtCore import QTimer
+from datetime import datetime
+import uuid
+
 from storage import save_entry, get_entry_by_date, upsert_entry, delete_entry_by_date
 from storage import load_data
+from storage import save_draft, load_draft, clear_draft  # NEW
+
+from settings import get_settings  # NEW
+from settings import update_settings  # NEW
 
 
 class HrtTrackerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("HRT Tracker")
-        self.resize(1000, 700)
+        self.settings = get_settings()  # NEW
+        self._dirty = False  # NEW
+        self._loading = False  # NEW (suppress dirty while programmatically setting fields)
 
-        # --- NEW: global styling + better defaults ---
-        self.setStyleSheet("""
-        QMainWindow { background: #0f172a; }
-        QWidget { color: #e5e7eb; font-size: 13px; }
-        QGroupBox {
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 12px;
-            margin-top: 12px;
-            padding: 10px;
-            background: rgba(255,255,255,0.03);
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 6px;
-            color: #f3f4f6;
-            font-weight: 600;
-        }
-        QTabWidget::pane {
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 12px;
-            background: rgba(255,255,255,0.02);
-        }
-        QTabBar::tab {
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.10);
-            padding: 8px 12px;
-            margin-right: 6px;
-            border-radius: 10px;
-        }
-        QTabBar::tab:selected { background: rgba(59,130,246,0.28); border-color: rgba(59,130,246,0.55); }
-        QLineEdit, QComboBox, QDateEdit, QTimeEdit, QTextEdit {
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 10px;
-            padding: 8px;
-            selection-background-color: rgba(59,130,246,0.55);
-        }
-        QTextEdit { line-height: 1.25; }
-        QPushButton {
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 10px;
-            padding: 8px 12px;
-        }
-        QPushButton:hover { background: rgba(255,255,255,0.10); }
-        QPushButton:pressed { background: rgba(255,255,255,0.14); }
-        QPushButton[variant="primary"] { background: rgba(59,130,246,0.55); border-color: rgba(59,130,246,0.75); font-weight: 600; }
-        QPushButton[variant="danger"]  { background: rgba(239,68,68,0.45); border-color: rgba(239,68,68,0.65); }
-        QSlider::groove:horizontal {
-            height: 8px; border-radius: 4px;
-            background: rgba(255,255,255,0.10);
-        }
-        QSlider::sub-page:horizontal {
-            background: rgba(59,130,246,0.55);
-            border-radius: 4px;
-        }
-        QSlider::handle:horizontal {
-            width: 18px; margin: -6px 0;
-            border-radius: 9px;
-            background: #e5e7eb;
-            border: 2px solid rgba(15,23,42,0.9);
-        }
-        QListWidget {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 12px;
-            padding: 6px;
-        }
-        QListWidget::item { padding: 8px; border-radius: 9px; }
-        QListWidget::item:selected { background: rgba(59,130,246,0.26); }
-        """)
+        self.setWindowTitle(self.settings.window_title)  # CHANGED
+        self.resize(self.settings.window_width, self.settings.window_height)  # CHANGED
+
+        # --- CHANGED: global styling is now generated from customizable theme colors ---
+        self._apply_theme_stylesheet()
         # --------------------------------------------
 
         # central widget
@@ -102,6 +49,34 @@ class HrtTrackerWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(14, 14, 14, 14)     # NEW
         main_layout.setSpacing(10)                         # NEW
+
+        # NEW: top-right action buttons (moved from bottom)
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+
+        # NEW: "New entry" workflow
+        self.new_btn = QPushButton("New entry")
+        self.new_btn.setToolTip("Clear form for a new entry (keeps selected date).")
+
+        self.delete_btn = QPushButton("Delete entry (by date)")
+        save_btn = QPushButton("Save entry")
+        clear_btn = QPushButton("Clear form")
+
+        # NEW: visual intent
+        self.delete_btn.setProperty("variant", "danger")
+        save_btn.setProperty("variant", "primary")
+
+        # NEW: shortcuts (avoid Del being too easy)
+        save_btn.setShortcut("Ctrl+S")
+        clear_btn.setShortcut("Ctrl+R")
+        self.new_btn.setShortcut("Ctrl+N")
+        self.delete_btn.setShortcut("Ctrl+Del")  # CHANGED
+
+        top_bar.addWidget(self.new_btn)
+        top_bar.addWidget(self.delete_btn)
+        top_bar.addWidget(clear_btn)
+        top_bar.addWidget(save_btn)
+        main_layout.addLayout(top_bar)
 
         # Tabs
         tabs = QTabWidget()
@@ -115,37 +90,43 @@ class HrtTrackerWindow(QMainWindow):
         tabs.addTab(self._create_mental_social_tab(), "Mental & Social")
         tabs.addTab(self._create_notes_tab(), "Notes & Progress")
         tabs.addTab(self._create_entries_tab(), "Entries")
-
-        # Bottom buttons
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-        self.delete_btn = QPushButton("Delete entry (by date)")
-        save_btn = QPushButton("Save entry")
-        clear_btn = QPushButton("Clear form")
-
-        # NEW: visual intent
-        self.delete_btn.setProperty("variant", "danger")
-        save_btn.setProperty("variant", "primary")
-
-        # NEW: shortcuts
-        save_btn.setShortcut("Ctrl+S")
-        clear_btn.setShortcut("Ctrl+R")
-        self.delete_btn.setShortcut("Del")
-
-        button_row.addWidget(self.delete_btn)
-        button_row.addWidget(clear_btn)
-        button_row.addWidget(save_btn)
-        main_layout.addLayout(button_row)
+        tabs.addTab(self._create_settings_tab(), "Settings")  # NEW
 
         clear_btn.clicked.connect(self._clear_all)
         save_btn.clicked.connect(self._save_entry)
         self.delete_btn.clicked.connect(self._delete_entry_for_date)
+        self.new_btn.clicked.connect(self._new_entry)  # NEW
 
         # Load existing entry whenever date changes
         self.date_edit.dateChanged.connect(self._load_entry_for_date)
         self._load_entry_for_date(self.date_edit.date())
 
         self._refresh_entries()
+
+        # NEW: autosave drafts
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(int(getattr(self.settings, "autosave_seconds", 30)) * 1000)
+        self._autosave_timer.timeout.connect(self._autosave_draft_if_dirty)
+        self._autosave_timer.start()
+
+        # NEW: restore draft if present for today (best-effort)
+        try:
+            draft = load_draft()
+            if draft:
+                self._apply_entry_to_form(draft, mark_clean=False)
+        except Exception:
+            pass
+
+        # NEW: pick default tab after UI is built
+        try:
+            if 0 <= int(self.settings.default_tab_index) < self.tabs.count():
+                self.tabs.setCurrentIndex(int(self.settings.default_tab_index))
+        except Exception:
+            pass
+
+        # NEW: wire dirty tracking after widgets exist
+        self._wire_dirty_tracking()
+        self._set_dirty(False)
 
     # -------------------------
     # Overview tab
@@ -429,6 +410,9 @@ class HrtTrackerWindow(QMainWindow):
         self.entries_search.setPlaceholderText("Search by date/time/medication…")
         self.entries_search.textChanged.connect(self._refresh_entries)
 
+        # NEW: quick filter hint tooltip
+        self.entries_search.setToolTip("Search matches date/time plus full entry JSON payload.")
+
         self.entries_format_btn = QPushButton("View: Plain text")
         self.entries_format_btn.setCheckable(True)
         self.entries_format_btn.toggled.connect(self._toggle_entries_view_format)
@@ -463,7 +447,9 @@ class HrtTrackerWindow(QMainWindow):
         self.entries_open_btn.clicked.connect(self._open_selected_entry_in_form)
         self.entries_delete_btn.clicked.connect(self._delete_selected_entry)
 
-        self._entries_view_mode = "plain"
+        self._entries_view_mode = self.settings.entries_default_view  # CHANGED
+        self.entries_format_btn.setChecked(self._entries_view_mode == "json")  # NEW
+        self.entries_format_btn.setText("View: JSON" if self._entries_view_mode == "json" else "View: Plain text")  # NEW
         return tab
 
     def _toggle_entries_view_format(self, checked: bool):
@@ -589,7 +575,16 @@ class HrtTrackerWindow(QMainWindow):
             QMessageBox.warning(self, "Load failed", f"Could not load entries:\n{ex}")
             return
 
-        data_sorted = sorted(data, key=lambda e: str(e.get("date", "")), reverse=True)
+        # CHANGED: sort by date+time (robust), fallback to date-only
+        def sort_key(e: dict):
+            d = str(e.get("date", "")).strip()
+            t = str(e.get("time", "")).strip() or "00:00"
+            try:
+                return datetime.fromisoformat(f"{d}T{t}")
+            except Exception:
+                return datetime.min
+
+        data_sorted = sorted(data, key=sort_key, reverse=True)
 
         # NEW: filter by search text
         query = ""
@@ -680,8 +675,354 @@ class HrtTrackerWindow(QMainWindow):
             QMessageBox.information(self, "Not found", "No entry exists for that date.")
 
     # -------------------------
+    # Settings tab
+    # -------------------------
+    def _create_settings_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        group = QGroupBox("App settings")
+        form = QFormLayout(group)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+
+        self.settings_title = QLineEdit()
+        self.settings_width = QSpinBox()
+        self.settings_width.setRange(600, 4000)
+
+        self.settings_height = QSpinBox()
+        self.settings_height.setRange(400, 3000)
+
+        self.settings_default_slider = QSpinBox()
+        self.settings_default_slider.setRange(0, 10)
+
+        self.settings_entries_view = QComboBox()
+        self.settings_entries_view.addItems(["plain", "json"])
+
+        self.settings_default_tab = QSpinBox()
+        self.settings_default_tab.setRange(0, 50)  # validated again on save
+
+        form.addRow("Window title:", self.settings_title)
+        form.addRow("Window width:", self.settings_width)
+        form.addRow("Window height:", self.settings_height)
+        form.addRow("Default slider value (0–10):", self.settings_default_slider)
+        form.addRow("Entries default view:", self.settings_entries_view)
+        form.addRow("Default tab index:", self.settings_default_tab)
+
+        # NEW: Theme section
+        theme_group = QGroupBox("Theme / colors")
+        theme_form = QFormLayout(theme_group)
+        theme_form.setHorizontalSpacing(14)
+        theme_form.setVerticalSpacing(10)
+
+        self.theme_bg = QLineEdit()
+        self.theme_accent = QLineEdit()
+        self.theme_text = QLineEdit()
+        self.theme_muted_text = QLineEdit()
+        self.theme_surface = QLineEdit()
+        self.theme_surface_2 = QLineEdit()
+        self.theme_border = QLineEdit()
+
+        def row_with_picker(label: str, line_edit: QLineEdit, *, allow_rgba: bool = False):
+            line_edit.setPlaceholderText("#rrggbb" + (" or rgba(r,g,b,a)" if allow_rgba else ""))
+            pick = QPushButton("Pick…")
+            pick.clicked.connect(lambda: self._pick_color_into(line_edit, allow_rgba=allow_rgba))
+            h = QWidget()
+            hl = QHBoxLayout(h)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(8)
+            hl.addWidget(line_edit, 1)
+            hl.addWidget(pick, 0)
+            theme_form.addRow(label, h)
+
+        row_with_picker("Background:", self.theme_bg, allow_rgba=False)
+        row_with_picker("Accent:", self.theme_accent, allow_rgba=False)
+        row_with_picker("Text:", self.theme_text, allow_rgba=False)
+        row_with_picker("Muted text:", self.theme_muted_text, allow_rgba=False)
+        row_with_picker("Surface:", self.theme_surface, allow_rgba=True)
+        row_with_picker("Surface 2 (inputs):", self.theme_surface_2, allow_rgba=True)
+        row_with_picker("Border:", self.theme_border, allow_rgba=True)
+
+        self.theme_apply_btn = QPushButton("Apply theme (no save)")
+        self.theme_apply_btn.clicked.connect(self._apply_theme_from_ui_preview)
+
+        layout.addWidget(group)
+        layout.addWidget(theme_group)
+        layout.addWidget(self.theme_apply_btn)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        self.settings_reload_btn = QPushButton("Reload settings")
+        self.settings_save_btn = QPushButton("Save settings")
+        self.settings_save_btn.setProperty("variant", "primary")
+        btns.addWidget(self.settings_reload_btn)
+        btns.addWidget(self.settings_save_btn)
+
+        layout.addLayout(btns)
+        layout.addStretch()
+
+        self.settings_reload_btn.clicked.connect(self._reload_settings_to_ui)
+        self.settings_save_btn.clicked.connect(self._save_settings_from_ui)
+
+        self._reload_settings_to_ui()
+        return tab
+
+    # -------------------------
+    # Theme helpers
+    # -------------------------
+    def _theme_stylesheet_from_settings(self) -> str:
+        s = self.settings
+        # keep most of your existing styling, but parameterize the important colors
+        return f"""
+        QMainWindow {{ background: {s.theme_bg}; }}
+        QWidget {{ color: {s.theme_text}; font-size: 13px; }}
+        QGroupBox {{
+            border: 1px solid {s.theme_border};
+            border-radius: 12px;
+            margin-top: 12px;
+            padding: 10px;
+            background: {s.theme_surface};
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 6px;
+            color: {s.theme_muted_text};
+            font-weight: 600;
+        }}
+        QTabWidget::pane {{
+            border: 1px solid {s.theme_border};
+            border-radius: 12px;
+            background: rgba(255,255,255,0.02);
+        }}
+        QTabBar::tab {{
+            background: rgba(255,255,255,0.04);
+            border: 1px solid {s.theme_border};
+            padding: 8px 12px;
+            margin-right: 6px;
+            border-radius: 10px;
+        }}
+        QTabBar::tab:selected {{ background: rgba(59,130,246,0.28); border-color: {s.theme_accent}; }}
+        QLineEdit, QComboBox, QDateEdit, QTimeEdit, QTextEdit {{
+            background: {s.theme_surface_2};
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 10px;
+            padding: 8px;
+            selection-background-color: rgba(59,130,246,0.55);
+        }}
+        QTextEdit {{ line-height: 1.25; }}
+        QPushButton {{
+            background: {s.theme_surface_2};
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 10px;
+            padding: 8px 12px;
+        }}
+        QPushButton:hover {{ background: rgba(255,255,255,0.10); }}
+        QPushButton:pressed {{ background: rgba(255,255,255,0.14); }}
+        QPushButton[variant="primary"] {{ background: {s.theme_accent}; border-color: {s.theme_accent}; font-weight: 600; }}
+        QPushButton[variant="danger"]  {{ background: rgba(239,68,68,0.45); border-color: rgba(239,68,68,0.65); }}
+        QSlider::groove:horizontal {{
+            height: 8px; border-radius: 4px;
+            background: rgba(255,255,255,0.10);
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {s.theme_accent};
+            border-radius: 4px;
+        }}
+        QSlider::handle:horizontal {{
+            width: 18px; margin: -6px 0;
+            border-radius: 9px;
+            background: #e5e7eb;
+            border: 2px solid rgba(15,23,42,0.9);
+        }}
+        QListWidget {{
+            background: {s.theme_surface};
+            border: 1px solid {s.theme_border};
+            border-radius: 12px;
+            padding: 6px;
+        }}
+        QListWidget::item {{ padding: 8px; border-radius: 9px; }}
+        QListWidget::item:selected {{ background: rgba(59,130,246,0.26); }}
+        """
+
+    def _apply_theme_stylesheet(self):
+        base = self._theme_stylesheet_from_settings()
+        self.setStyleSheet(base + "\n" + (self.settings.stylesheet or ""))
+
+    def _pick_color_into(self, target: QLineEdit, *, allow_rgba: bool = False):
+        initial = QColor(target.text().strip()) if target.text().strip().startswith("#") else QColor()
+        color = QColorDialog.getColor(initial, self, "Pick color")
+        if not color.isValid():
+            return
+        if allow_rgba:
+            target.setText(f"rgba({color.red()},{color.green()},{color.blue()},0.06)")
+        else:
+            target.setText(color.name())  # "#rrggbb"
+
+    def _apply_theme_from_ui_preview(self):
+        # best-effort: temporarily apply (not persisted)
+        try:
+            self.settings = update_settings(
+                theme_bg=self.theme_bg.text().strip() or self.settings.theme_bg,
+                theme_accent=self.theme_accent.text().strip() or self.settings.theme_accent,
+                theme_text=self.theme_text.text().strip() or self.settings.theme_text,
+                theme_muted_text=self.theme_muted_text.text().strip() or self.settings.theme_muted_text,
+                theme_surface=self.theme_surface.text().strip() or self.settings.theme_surface,
+                theme_surface_2=self.theme_surface_2.text().strip() or self.settings.theme_surface_2,
+                theme_border=self.theme_border.text().strip() or self.settings.theme_border,
+            )
+        except Exception:
+            # if validation fails in settings.py, just reload persisted settings
+            self.settings = get_settings(force_reload=True)
+        self._apply_settings_to_app()
+
+    # -------------------------
+    # Settings handlers
+    # -------------------------
+    def _apply_settings_to_app(self):
+        """
+        Apply currently loaded self.settings to the running UI (best-effort).
+        Persistence is handled by update_settings() in settings.py.
+        """
+        self.setWindowTitle(self.settings.window_title)
+        self.resize(self.settings.window_width, self.settings.window_height)
+
+        # NEW: apply theme colors immediately
+        self._apply_theme_stylesheet()
+
+        # Entries view mode (and force details rerender if something is selected)
+        if hasattr(self, "entries_format_btn") and self.entries_format_btn is not None:
+            want_json = self.settings.entries_default_view == "json"
+            # avoid recursive toggled churn if already correct
+            if self.entries_format_btn.isChecked() != want_json:
+                self.entries_format_btn.setChecked(want_json)
+            else:
+                self._on_entries_selection_changed(self.entries_list.currentItem(), None)
+
+        # NEW: update autosave interval live
+        if hasattr(self, "_autosave_timer") and self._autosave_timer is not None:
+            self._autosave_timer.setInterval(int(getattr(self.settings, "autosave_seconds", 30)) * 1000)
+
+    def _reload_settings_to_ui(self):
+        self.settings = get_settings(force_reload=True)
+
+        self.settings_title.setText(self.settings.window_title)
+        self.settings_width.setValue(int(self.settings.window_width))
+        self.settings_height.setValue(int(self.settings.window_height))
+        self.settings_default_slider.setValue(int(self.settings.default_slider_value))
+
+        idx = self.settings_entries_view.findText(str(self.settings.entries_default_view))
+        self.settings_entries_view.setCurrentIndex(idx if idx >= 0 else 0)
+
+        self.settings_default_tab.setValue(int(self.settings.default_tab_index))
+
+        # NEW: theme fields
+        if hasattr(self, "theme_bg"):
+            self.theme_bg.setText(self.settings.theme_bg)
+            self.theme_accent.setText(self.settings.theme_accent)
+            self.theme_text.setText(self.settings.theme_text)
+            self.theme_muted_text.setText(self.settings.theme_muted_text)
+            self.theme_surface.setText(self.settings.theme_surface)
+            self.theme_surface_2.setText(self.settings.theme_surface_2)
+            self.theme_border.setText(self.settings.theme_border)
+
+        # NEW: also apply to running app
+        self._apply_settings_to_app()
+
+    def _save_settings_from_ui(self):
+        # clamp tab index to available count
+        tab_index = int(self.settings_default_tab.value())
+        if tab_index < 0:
+            tab_index = 0
+        if hasattr(self, "tabs") and self.tabs is not None:
+            tab_index = min(tab_index, max(0, self.tabs.count() - 1))
+
+        try:
+            self.settings = update_settings(
+                window_title=self.settings_title.text().strip() or "HRT Tracker",
+                window_width=int(self.settings_width.value()),
+                window_height=int(self.settings_height.value()),
+                default_slider_value=int(self.settings_default_slider.value()),
+                entries_default_view=str(self.settings_entries_view.currentText()).strip().lower(),
+                default_tab_index=int(tab_index),
+
+                # NEW: theme save
+                theme_bg=self.theme_bg.text().strip(),
+                theme_accent=self.theme_accent.text().strip(),
+                theme_text=self.theme_text.text().strip(),
+                theme_muted_text=self.theme_muted_text.text().strip(),
+                theme_surface=self.theme_surface.text().strip(),
+                theme_surface_2=self.theme_surface_2.text().strip(),
+                theme_border=self.theme_border.text().strip(),
+            )
+        except Exception as ex:
+            QMessageBox.critical(self, "Settings", f"Could not save settings:\n{ex}")
+            return
+
+        # CHANGED: one place to apply effects immediately
+        self._apply_settings_to_app()
+
+        QMessageBox.information(
+            self,
+            "Settings",
+            "Settings saved. Defaults apply immediately; existing saved entries are unchanged.",
+        )
+
+    # -------------------------
     # Helpers
     # -------------------------
+    def _set_dirty(self, value: bool):
+        self._dirty = bool(value)
+        base = self.settings.window_title or "HRT Tracker"
+        self.setWindowTitle(base + ("  *" if self._dirty else ""))
+
+    def _mark_dirty(self):
+        if self._loading:
+            return
+        self._set_dirty(True)
+
+    def _wire_dirty_tracking(self):
+        # sliders
+        for s in [
+            self.energy_slider, self.overall_mood_slider, self.dysphoria_slider, self.euphoria_slider,
+            self.mood_slider, self.anxiety_slider, self.irritability_slider, self.stress_slider,
+            self.energy_physical_slider, self.sleep_quality_slider, self.libido_slider,
+            self.social_energy_slider, self.body_image_slider,
+        ]:
+            s.slider.valueChanged.connect(self._mark_dirty)
+
+        # text inputs
+        for w in [
+            self.med_type, self.med_dose,
+            self.entries_search,  # harmless, but keeps model simple
+            self.mood_notes, self.med_side_effects, self.skin_changes, self.body_hair_changes,
+            self.body_shape_changes, self.breast_chest_sensations, self.general_physical_notes,
+            self.dysphoria_context, self.euphoria_context, self.social_notes, self.general_notes,
+        ]:
+            try:
+                w.textChanged.connect(self._mark_dirty)  # QLineEdit
+            except Exception:
+                try:
+                    w.textChanged.connect(self._mark_dirty)  # QTextEdit via document signal below (fallback)
+                except Exception:
+                    pass
+
+        # QTextEdits: use document change signal (reliable)
+        for te in [
+            self.mood_notes, self.med_side_effects, self.skin_changes, self.body_hair_changes,
+            self.body_shape_changes, self.breast_chest_sensations, self.general_physical_notes,
+            self.dysphoria_context, self.euphoria_context, self.social_notes, self.general_notes,
+        ]:
+            te.document().contentsChanged.connect(self._mark_dirty)
+
+        # combos/checkbox/time
+        self.med_route.currentIndexChanged.connect(self._mark_dirty)
+        self.med_missed_checkbox.stateChanged.connect(self._mark_dirty)
+        self.time_edit.timeChanged.connect(self._mark_dirty)
+        self.med_taken_time.timeChanged.connect(self._mark_dirty)
+
     def _create_labeled_slider(self) -> QWidget:
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -693,11 +1034,11 @@ class HrtTrackerWindow(QMainWindow):
         slider.setMaximum(10)
         slider.setTickInterval(1)
         slider.setTickPosition(QSlider.TicksBelow)
-        slider.setValue(5)
+        slider.setValue(int(getattr(self, "settings", None).default_slider_value) if getattr(self, "settings", None) else 5)  # CHANGED
         slider.setSingleStep(1)                # NEW
         slider.setPageStep(1)                  # NEW
 
-        value_label = QLabel("5 / 10")         # NEW
+        value_label = QLabel(f"{slider.value()} / 10")  # CHANGED
         value_label.setFixedWidth(56)          # NEW
         value_label.setAlignment(Qt.AlignCenter)
 
@@ -713,98 +1054,19 @@ class HrtTrackerWindow(QMainWindow):
         container.value_label = value_label
         return container
 
-    def _clear_all(self):
-        self.time_edit.setTime(QTime.currentTime())
+    def _build_entry_from_form(self) -> dict:
+        # stable id per date entry: preserve if existing
+        existing = get_entry_by_date(self.date_edit.date().toPython())
+        existing_id = (existing or {}).get("id") if isinstance(existing, dict) else None
 
-        self.med_type.clear()
-        self.med_dose.clear()
+        now = datetime.now().isoformat(timespec="seconds")
+        created_at = (existing or {}).get("created_at") if isinstance(existing, dict) else None
 
-        self.med_route.setCurrentIndex(0)
-        self.med_missed_checkbox.setChecked(False)
+        return {
+            "id": existing_id or str(uuid.uuid4()),
+            "created_at": created_at or now,
+            "updated_at": now,
 
-        self.med_side_effects.clear()
-        self.mood_notes.clear()
-        self.skin_changes.clear()
-        self.body_hair_changes.clear()
-        self.body_shape_changes.clear()
-        self.breast_chest_sensations.clear()
-        self.general_physical_notes.clear()
-        self.dysphoria_context.clear()
-        self.euphoria_context.clear()
-        self.social_notes.clear()
-        self.general_notes.clear()
-
-        for s in [
-            self.energy_slider, self.overall_mood_slider, self.dysphoria_slider, self.euphoria_slider,
-            self.mood_slider, self.anxiety_slider, self.irritability_slider, self.stress_slider,
-            self.energy_physical_slider, self.sleep_quality_slider, self.libido_slider,
-            self.social_energy_slider, self.body_image_slider,
-        ]:
-            s.slider.setValue(5)
-
-    def _load_entry_for_date(self, qdate: QDate):
-        entry = get_entry_by_date(qdate.toPython())
-        if not entry:
-            return
-
-        try:
-            t = (entry.get("time") or "").strip()
-            if t:
-                parsed = QTime.fromString(t, "HH:mm")
-                if parsed.isValid():
-                    self.time_edit.setTime(parsed)
-
-            self.energy_slider.slider.setValue(int(entry.get("energy", 5)))
-            self.overall_mood_slider.slider.setValue(int(entry.get("overall_mood", 5)))
-            self.dysphoria_slider.slider.setValue(int(entry.get("dysphoria", 5)))
-            self.euphoria_slider.slider.setValue(int(entry.get("euphoria", 5)))
-
-            med = entry.get("medication") or {}
-            self.med_type.setText(str(med.get("type", "")))
-            route = str(med.get("route", ""))
-            idx = self.med_route.findText(route)
-            self.med_route.setCurrentIndex(idx if idx >= 0 else 0)
-            self.med_dose.setText(str(med.get("dose", "")))
-
-            mt = str(med.get("time_taken", "")).strip()
-            if mt:
-                parsed = QTime.fromString(mt, "HH:mm")
-                if parsed.isValid():
-                    self.med_taken_time.setTime(parsed)
-
-            self.med_missed_checkbox.setChecked(bool(med.get("missed", False)))
-            self.med_side_effects.setPlainText(str(med.get("side_effects", "")))
-
-            mood = entry.get("mood_details") or {}
-            self.mood_slider.slider.setValue(int(mood.get("mood", 5)))
-            self.anxiety_slider.slider.setValue(int(mood.get("anxiety", 5)))
-            self.irritability_slider.slider.setValue(int(mood.get("irritability", 5)))
-            self.stress_slider.slider.setValue(int(mood.get("stress", 5)))
-            self.mood_notes.setPlainText(str(mood.get("notes", "")))
-
-            phys = entry.get("physical") or {}
-            self.energy_physical_slider.slider.setValue(int(phys.get("energy_physical", 5)))
-            self.sleep_quality_slider.slider.setValue(int(phys.get("sleep_quality", 5)))
-            self.libido_slider.slider.setValue(int(phys.get("libido", 5)))
-            self.skin_changes.setPlainText(str(phys.get("skin", "")))
-            self.body_hair_changes.setPlainText(str(phys.get("body_hair", "")))
-            self.body_shape_changes.setPlainText(str(phys.get("body_shape", "")))
-            self.breast_chest_sensations.setPlainText(str(phys.get("breast_chest", "")))
-            self.general_physical_notes.setPlainText(str(phys.get("other", "")))
-
-            ms = entry.get("mental_social") or {}
-            self.social_energy_slider.slider.setValue(int(ms.get("social_energy", 5)))
-            self.body_image_slider.slider.setValue(int(ms.get("body_image", 5)))
-            self.dysphoria_context.setPlainText(str(ms.get("dysphoria_context", "")))
-            self.euphoria_context.setPlainText(str(ms.get("euphoria_context", "")))
-            self.social_notes.setPlainText(str(ms.get("social_notes", "")))
-
-            self.general_notes.setPlainText(str(entry.get("notes", "")))
-        except Exception as ex:
-            QMessageBox.warning(self, "Load failed", f"Could not load entry for this date:\n{ex}")
-
-    def _save_entry(self):
-        entry = {
             "date": self.date_edit.date().toPython().isoformat(),
             "time": self.time_edit.time().toString("HH:mm"),
 
@@ -852,30 +1114,199 @@ class HrtTrackerWindow(QMainWindow):
             "notes": self.general_notes.toPlainText(),
         }
 
+    def _apply_entry_to_form(self, entry: dict, *, mark_clean: bool = True):
+        self._loading = True
+        try:
+            iso = str(entry.get("date", "")).strip()
+            if iso:
+                qd = QDate.fromString(iso, "yyyy-MM-dd")
+                if qd.isValid():
+                    self.date_edit.setDate(qd)
+
+            t = (entry.get("time") or "").strip()
+            if t:
+                parsed = QTime.fromString(t, "HH:mm")
+                if parsed.isValid():
+                    self.time_edit.setTime(parsed)
+
+            # overview
+            self.energy_slider.slider.setValue(int(entry.get("energy", self.settings.default_slider_value)))
+            self.overall_mood_slider.slider.setValue(int(entry.get("overall_mood", self.settings.default_slider_value)))
+            self.dysphoria_slider.slider.setValue(int(entry.get("dysphoria", self.settings.default_slider_value)))
+            self.euphoria_slider.slider.setValue(int(entry.get("euphoria", self.settings.default_slider_value)))
+
+            # medication
+            med = entry.get("medication") or {}
+            self.med_type.setText(str(med.get("type", "")))
+            idx = self.med_route.findText(str(med.get("route", "")))
+            self.med_route.setCurrentIndex(idx if idx >= 0 else 0)
+            self.med_dose.setText(str(med.get("dose", "")))
+            mt = str(med.get("time_taken", "")).strip()
+            if mt:
+                parsed = QTime.fromString(mt, "HH:mm")
+                if parsed.isValid():
+                    self.med_taken_time.setTime(parsed)
+            self.med_missed_checkbox.setChecked(bool(med.get("missed", False)))
+            self.med_side_effects.setPlainText(str(med.get("side_effects", "")))
+
+            # mood
+            mood = entry.get("mood_details") or {}
+            self.mood_slider.slider.setValue(int(mood.get("mood", self.settings.default_slider_value)))
+            self.anxiety_slider.slider.setValue(int(mood.get("anxiety", self.settings.default_slider_value)))
+            self.irritability_slider.slider.setValue(int(mood.get("irritability", self.settings.default_slider_value)))
+            self.stress_slider.slider.setValue(int(mood.get("stress", self.settings.default_slider_value)))
+            self.mood_notes.setPlainText(str(mood.get("notes", "")))
+
+            # physical
+            phys = entry.get("physical") or {}
+            self.energy_physical_slider.slider.setValue(int(phys.get("energy_physical", self.settings.default_slider_value)))
+            self.sleep_quality_slider.slider.setValue(int(phys.get("sleep_quality", self.settings.default_slider_value)))
+            self.libido_slider.slider.setValue(int(phys.get("libido", self.settings.default_slider_value)))
+            self.skin_changes.setPlainText(str(phys.get("skin", "")))
+            self.body_hair_changes.setPlainText(str(phys.get("body_hair", "")))
+            self.body_shape_changes.setPlainText(str(phys.get("body_shape", "")))
+            self.breast_chest_sensations.setPlainText(str(phys.get("breast_chest", "")))
+            self.general_physical_notes.setPlainText(str(phys.get("other", "")))
+
+            # mental/social
+            ms = entry.get("mental_social") or {}
+            self.social_energy_slider.slider.setValue(int(ms.get("social_energy", self.settings.default_slider_value)))
+            self.body_image_slider.slider.setValue(int(ms.get("body_image", self.settings.default_slider_value)))
+            self.dysphoria_context.setPlainText(str(ms.get("dysphoria_context", "")))
+            self.euphoria_context.setPlainText(str(ms.get("euphoria_context", "")))
+            self.social_notes.setPlainText(str(ms.get("social_notes", "")))
+
+            self.general_notes.setPlainText(str(entry.get("notes", "")))
+        finally:
+            self._loading = False
+        if mark_clean:
+            self._set_dirty(False)
+
+    def _autosave_draft_if_dirty(self):
+        if not self._dirty:
+            return
+        try:
+            save_draft(self._build_entry_from_form())
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        # autosave draft on exit; optional confirm
+        try:
+            if self._dirty:
+                self._autosave_draft_if_dirty()
+                if bool(getattr(self.settings, "confirm_on_exit_with_unsaved", True)):
+                    res = QMessageBox.question(
+                        self,
+                        "Unsaved changes",
+                        "You have unsaved changes. Close anyway? (A draft will be autosaved.)",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    )
+                    if res != QMessageBox.Yes:
+                        event.ignore()
+                        return
+        except Exception:
+            pass
+        event.accept()
+
+    def _new_entry(self):
+        # keep date, clear the rest, mark dirty (user intent)
+        kept = self.date_edit.date()
+        self._clear_all()
+        self.date_edit.setDate(kept)
+        self._set_dirty(True)
+
+    def _clear_all(self):
+        self.time_edit.setTime(QTime.currentTime())
+
+        self.med_type.clear()
+        self.med_dose.clear()
+
+        self.med_route.setCurrentIndex(0)
+        self.med_missed_checkbox.setChecked(False)
+
+        self.med_side_effects.clear()
+        self.mood_notes.clear()
+        self.skin_changes.clear()
+        self.body_hair_changes.clear()
+        self.body_shape_changes.clear()
+        self.breast_chest_sensations.clear()
+        self.general_physical_notes.clear()
+        self.dysphoria_context.clear()
+        self.euphoria_context.clear()
+        self.social_notes.clear()
+        self.general_notes.clear()
+
+        default_val = int(self.settings.default_slider_value)
+        for s in [
+            self.energy_slider, self.overall_mood_slider, self.dysphoria_slider, self.euphoria_slider,
+            self.mood_slider, self.anxiety_slider, self.irritability_slider, self.stress_slider,
+            self.energy_physical_slider, self.sleep_quality_slider, self.libido_slider,
+            self.social_energy_slider, self.body_image_slider,
+        ]:
+            s.slider.setValue(default_val)
+        self._set_dirty(False)  # NEW
+
+    def _load_entry_for_date(self, qdate: QDate):
+        entry = get_entry_by_date(qdate.toPython())
+        if not entry:
+            # NEW: if no saved entry for date, keep current dirty state, but try to load draft for that date
+            try:
+                draft = load_draft()
+                if draft and str(draft.get("date", "")).strip() == qdate.toString("yyyy-MM-dd"):
+                    self._apply_entry_to_form(draft, mark_clean=False)
+            except Exception:
+                pass
+            return
+
+        try:
+            self._apply_entry_to_form(entry, mark_clean=True)  # CHANGED
+        except Exception as ex:
+            QMessageBox.warning(self, "Load failed", f"Could not load entry for this date:\n{ex}")
+
+    def _save_entry(self):
+        entry = self._build_entry_from_form()  # CHANGED
+
         try:
             updated = upsert_entry(entry)
         except Exception as ex:
             QMessageBox.critical(self, "Save failed", f"Could not save entry:\n{ex}")
             return
 
+        # NEW: clear persisted draft once a real save succeeds
+        try:
+            clear_draft()
+        except Exception:
+            pass
+
         QMessageBox.information(
             self,
             "Saved",
             "Entry updated for this date." if updated else "Entry saved for this date.",
         )
+
+        saved_date = self.date_edit.date()
+        self._clear_all()
+        self.date_edit.setDate(saved_date)
+
         self._refresh_entries()
+        self._set_dirty(False)  # NEW
 
     def _delete_entry_for_date(self):
         d = self.date_edit.date().toPython()
-        res = QMessageBox.question(
-            self,
-            "Delete entry",
-            f"Delete entry for {d.isoformat()}?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if res != QMessageBox.Yes:
-            return
+
+        # NEW: optionally confirm
+        if bool(getattr(self.settings, "confirm_on_delete", True)):
+            res = QMessageBox.question(
+                self,
+                "Delete entry",
+                f"Delete entry for {d.isoformat()}?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if res != QMessageBox.Yes:
+                return
 
         try:
             deleted = delete_entry_by_date(d)

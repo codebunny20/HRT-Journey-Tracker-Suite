@@ -1,0 +1,44 @@
+{
+  "id": "9d1f888e-5057-49aa-b06b-11a4fd99fccf",
+  "created_at": "2025-12-28T04:33:26",
+  "updated_at": "2025-12-28T04:33:26",
+  "date": "2025-12-02",
+  "time": "04:33",
+  "energy": 5,
+  "overall_mood": 5,
+  "dysphoria": 5,
+  "euphoria": 5,
+  "medication": {
+    "type": "",
+    "route": "",
+    "dose": "",
+    "time_taken": "04:31",
+    "missed": false,
+    "side_effects": ""
+  },
+  "mood_details": {
+    "mood": 5,
+    "anxiety": 5,
+    "irritability": 5,
+    "stress": 5,
+    "notes": ""
+  },
+  "physical": {
+    "energy_physical": 5,
+    "sleep_quality": 5,
+    "libido": 5,
+    "skin": "",
+    "body_hair": "",
+    "body_shape": "",
+    "breast_chest": "",
+    "other": ""
+  },
+  "mental_social": {
+    "social_energy": 5,
+    "body_image": 5,
+    "dysphoria_context": "",
+    "euphoria_context": "",
+    "social_notes": ""
+  },
+  "notes": ""
+}

@@ -1,0 +1,20 @@
+{
+  "window_title": "HRT Tracker",
+  "window_width": 1000,
+  "window_height": 600,
+  "default_slider_value": 5,
+  "entries_default_view": "plain",
+  "default_tab_index": 0,
+  "theme_accent": "#3b82f6",
+  "theme_bg": "#000000",
+  "theme_text": "#e5e7eb",
+  "theme_muted_text": "#f3f4f6",
+  "theme_surface": "rgba(255,255,255,0.03)",
+  "theme_surface_2": "rgba(255,255,255,0.06)",
+  "theme_border": "rgba(255,85,255,0.06)",
+  "stylesheet": "",
+  "autosave_seconds": 30,
+  "confirm_on_delete": true,
+  "confirm_on_exit_with_unsaved": true,
+  "storage_file_path": ""
+}
