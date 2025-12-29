@@ -12,13 +12,14 @@ import sys
 import json
 
 # NEW
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import QColorDialog
 
 # NEW: autosave + ids
 from PySide6.QtCore import QTimer
 from datetime import datetime
 import uuid
+import base64
 
 from storage import save_entry, get_entry_by_date, upsert_entry, delete_entry_by_date
 from storage import load_data
@@ -42,6 +43,9 @@ class HrtTrackerWindow(QMainWindow):
         # --- CHANGED: global styling is now generated from customizable theme colors ---
         self._apply_theme_stylesheet()
         # --------------------------------------------
+
+        # NEW: restore geometry/state if available; otherwise center window
+        self._restore_window_prefs_or_center()
 
         # central widget
         central = QWidget()
@@ -124,6 +128,13 @@ class HrtTrackerWindow(QMainWindow):
         except Exception:
             pass
 
+        # NEW: keep “header card” in sync
+        self._update_overview_header()
+        self.date_edit.dateChanged.connect(lambda _d: self._update_overview_header())
+        self.time_edit.timeChanged.connect(lambda _t: self._update_overview_header())
+        for s in [self.energy_slider, self.overall_mood_slider, self.dysphoria_slider, self.euphoria_slider]:
+            s.slider.valueChanged.connect(lambda _v: self._update_overview_header())
+
         # NEW: wire dirty tracking after widgets exist
         self._wire_dirty_tracking()
         self._set_dirty(False)
@@ -137,6 +148,61 @@ class HrtTrackerWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)  # NEW
         layout.setSpacing(10)                      # NEW
 
+        # NEW: top header card (makes the main window feel less “blank”)
+        self.overview_header = QGroupBox()
+        self.overview_header.setTitle("")
+        header_layout = QHBoxLayout(self.overview_header)
+        header_layout.setContentsMargins(14, 12, 14, 12)
+        header_layout.setSpacing(12)
+
+        left = QWidget()
+        left_l = QVBoxLayout(left)
+        left_l.setContentsMargins(0, 0, 0, 0)
+        left_l.setSpacing(4)
+
+        self.overview_title = QLabel("Today")
+        self.overview_title.setProperty("role", "h1")
+        self.overview_subtitle = QLabel("")
+        self.overview_subtitle.setProperty("role", "muted")
+
+        left_l.addWidget(self.overview_title)
+        left_l.addWidget(self.overview_subtitle)
+
+        right = QWidget()
+        right_l = QHBoxLayout(right)
+        right_l.setContentsMargins(0, 0, 0, 0)
+        right_l.setSpacing(10)
+
+        def stat_chip(label: str) -> QWidget:
+            w = QGroupBox()
+            w.setProperty("role", "chip")
+            l = QVBoxLayout(w)
+            l.setContentsMargins(10, 8, 10, 8)
+            l.setSpacing(2)
+            title = QLabel(label)
+            title.setProperty("role", "muted")
+            value = QLabel("—")
+            value.setProperty("role", "chipValue")
+            l.addWidget(title, 0)
+            l.addWidget(value, 0)
+            w.value_label = value
+            return w
+
+        self._chip_energy = stat_chip("Energy")
+        self._chip_mood = stat_chip("Mood")
+        self._chip_dysphoria = stat_chip("Dysphoria")
+        self._chip_euphoria = stat_chip("Euphoria")
+
+        right_l.addWidget(self._chip_energy)
+        right_l.addWidget(self._chip_mood)
+        right_l.addWidget(self._chip_dysphoria)
+        right_l.addWidget(self._chip_euphoria)
+
+        header_layout.addWidget(left, 1)
+        header_layout.addWidget(right, 0)
+
+        layout.addWidget(self.overview_header)
+
         # Date/time row
         dt_layout = QHBoxLayout()
         dt_layout.setSpacing(10)  # NEW
@@ -145,11 +211,13 @@ class HrtTrackerWindow(QMainWindow):
         self.date_edit.setDate(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")  # NEW
+        self.date_edit.setMinimumWidth(140)  # NEW
         dt_layout.addWidget(self.date_edit)
 
         dt_layout.addWidget(QLabel("Time:"))
         self.time_edit = QTimeEdit()
         self.time_edit.setTime(QTime.currentTime())
+        self.time_edit.setMinimumWidth(120)  # NEW
         dt_layout.addWidget(self.time_edit)
 
         dt_layout.addStretch()
@@ -774,10 +842,20 @@ class HrtTrackerWindow(QMainWindow):
     # -------------------------
     def _theme_stylesheet_from_settings(self) -> str:
         s = self.settings
-        # keep most of your existing styling, but parameterize the important colors
         return f"""
         QMainWindow {{ background: {s.theme_bg}; }}
         QWidget {{ color: {s.theme_text}; font-size: 13px; }}
+
+        /* NEW: subtle hierarchy helpers */
+        QLabel[role="h1"] {{ font-size: 16px; font-weight: 700; }}
+        QLabel[role="muted"] {{ color: {s.theme_muted_text}; opacity: 0.85; }}
+        QGroupBox[role="chip"] {{
+            border: 1px solid {s.theme_border};
+            border-radius: 12px;
+            background: {s.theme_surface_2};
+        }}
+        QLabel[role="chipValue"] {{ font-size: 14px; font-weight: 700; }}
+
         QGroupBox {{
             border: 1px solid {s.theme_border};
             border-radius: 12px;
@@ -804,7 +882,9 @@ class HrtTrackerWindow(QMainWindow):
             margin-right: 6px;
             border-radius: 10px;
         }}
+        QTabBar::tab:hover {{ background: rgba(255,255,255,0.06); }}
         QTabBar::tab:selected {{ background: rgba(59,130,246,0.28); border-color: {s.theme_accent}; }}
+
         QLineEdit, QComboBox, QDateEdit, QTimeEdit, QTextEdit {{
             background: {s.theme_surface_2};
             border: 1px solid rgba(255,255,255,0.12);
@@ -812,6 +892,11 @@ class HrtTrackerWindow(QMainWindow):
             padding: 8px;
             selection-background-color: rgba(59,130,246,0.55);
         }}
+        /* NEW: clearer focus */
+        QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus, QTextEdit:focus {{
+            border-color: {s.theme_accent};
+        }}
+
         QTextEdit {{ line-height: 1.25; }}
         QPushButton {{
             background: {s.theme_surface_2};
@@ -823,6 +908,7 @@ class HrtTrackerWindow(QMainWindow):
         QPushButton:pressed {{ background: rgba(255,255,255,0.14); }}
         QPushButton[variant="primary"] {{ background: {s.theme_accent}; border-color: {s.theme_accent}; font-weight: 600; }}
         QPushButton[variant="danger"]  {{ background: rgba(239,68,68,0.45); border-color: rgba(239,68,68,0.65); }}
+
         QSlider::groove:horizontal {{
             height: 8px; border-radius: 4px;
             background: rgba(255,255,255,0.10);
@@ -877,6 +963,63 @@ class HrtTrackerWindow(QMainWindow):
             # if validation fails in settings.py, just reload persisted settings
             self.settings = get_settings(force_reload=True)
         self._apply_settings_to_app()
+
+    # -------------------------
+    # NEW: window display helpers (center + persist)
+    # -------------------------
+    def _restore_window_prefs_or_center(self) -> None:
+        # restore geometry/state if saved; else center it
+        try:
+            geom_b64 = (getattr(self.settings, "window_geometry_b64", "") or "").strip()
+            if geom_b64:
+                self.restoreGeometry(base64.b64decode(geom_b64.encode("ascii")))
+            state_b64 = (getattr(self.settings, "window_state_b64", "") or "").strip()
+            if state_b64:
+                self.restoreState(base64.b64decode(state_b64.encode("ascii")))
+        except Exception:
+            pass
+
+        # If still no meaningful geometry (first run), center on current screen
+        try:
+            if not (getattr(self.settings, "window_geometry_b64", "") or "").strip():
+                self._center_on_screen()
+        except Exception:
+            pass
+
+    def _center_on_screen(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        if not screen:
+            return
+        avail = screen.availableGeometry()
+        frame = self.frameGeometry()
+        frame.moveCenter(avail.center())
+        self.move(frame.topLeft())
+
+    def _persist_window_prefs(self) -> None:
+        # best-effort: save geometry/state frequently enough (close only is fine)
+        try:
+            geom = base64.b64encode(bytes(self.saveGeometry())).decode("ascii")
+            state = base64.b64encode(bytes(self.saveState())).decode("ascii")
+            self.settings = update_settings(window_geometry_b64=geom, window_state_b64=state)
+        except Exception:
+            pass
+
+    # -------------------------
+    # NEW: Overview header updater
+    # -------------------------
+    def _update_overview_header(self) -> None:
+        if not hasattr(self, "_chip_energy"):
+            return
+
+        iso = self.date_edit.date().toString("yyyy-MM-dd")
+        t = self.time_edit.time().toString("HH:mm")
+        self.overview_title.setText(iso)
+        self.overview_subtitle.setText(f"Logged time: {t}")
+
+        self._chip_energy.value_label.setText(f"{self.energy_slider.slider.value()}/10")
+        self._chip_mood.value_label.setText(f"{self.overall_mood_slider.slider.value()}/10")
+        self._chip_dysphoria.value_label.setText(f"{self.dysphoria_slider.slider.value()}/10")
+        self._chip_euphoria.value_label.setText(f"{self.euphoria_slider.slider.value()}/10")
 
     # -------------------------
     # Settings handlers
@@ -1179,6 +1322,13 @@ class HrtTrackerWindow(QMainWindow):
             self.general_notes.setPlainText(str(entry.get("notes", "")))
         finally:
             self._loading = False
+
+        # NEW: keep header in sync after programmatic loads
+        try:
+            self._update_overview_header()
+        except Exception:
+            pass
+
         if mark_clean:
             self._set_dirty(False)
 
@@ -1191,6 +1341,9 @@ class HrtTrackerWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
+        # NEW: persist geometry/state on close
+        self._persist_window_prefs()
+
         # autosave draft on exit; optional confirm
         try:
             if self._dirty:
@@ -1247,6 +1400,12 @@ class HrtTrackerWindow(QMainWindow):
         ]:
             s.slider.setValue(default_val)
         self._set_dirty(False)  # NEW
+
+        # NEW: reflect cleared defaults in header chips
+        try:
+            self._update_overview_header()
+        except Exception:
+            pass
 
     def _load_entry_for_date(self, qdate: QDate):
         entry = get_entry_by_date(qdate.toPython())

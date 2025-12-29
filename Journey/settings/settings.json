@@ -16,5 +16,7 @@
   "autosave_seconds": 30,
   "confirm_on_delete": true,
   "confirm_on_exit_with_unsaved": true,
-  "storage_file_path": ""
+  "storage_file_path": "",
+  "window_geometry_b64": "AdnQywADAAAAAAMBAAAAAAAABf4AAAOGAAADAQAAAB4AAAX+AAADhgAAAAAAAAAABgAAAAMBAAAAHgAABf4AAAOG",
+  "window_state_b64": "AAAA/wAAAAD9AAAAAAAAAv4AAANpAAAABAAAAAQAAAAIAAAACPwAAAAA"
 }

@@ -53,6 +53,10 @@ class AppSettings:
     # NEW: optional override for storage location (empty => default in storage.py)
     storage_file_path: str = ""
 
+    # NEW: persist window geometry/state (Qt saves these as bytes; we store as base64 strings)
+    window_geometry_b64: str = ""
+    window_state_b64: str = ""
+
 
 def _ensure_settings_dir() -> None:
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -164,6 +168,10 @@ def load_settings() -> AppSettings:
             merged.get("confirm_on_exit_with_unsaved"), defaults["confirm_on_exit_with_unsaved"]
         )
         merged["storage_file_path"] = _coerce_str(merged.get("storage_file_path"), defaults["storage_file_path"]).strip()
+
+        # NEW: keep as strings (may be empty)
+        merged["window_geometry_b64"] = _coerce_str(merged.get("window_geometry_b64"), defaults["window_geometry_b64"]).strip()
+        merged["window_state_b64"] = _coerce_str(merged.get("window_state_b64"), defaults["window_state_b64"]).strip()
 
         # theme validation
         merged["theme_accent"] = _coerce_color(merged.get("theme_accent"), defaults["theme_accent"], allow_rgba=False)
