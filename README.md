@@ -1,4 +1,4 @@
-# HRT Journey Tracker — Workspace README
+# HRT Journey Tracker — Suite README
 
 This workspace contains two small Windows desktop apps being developed in parallel:
 
