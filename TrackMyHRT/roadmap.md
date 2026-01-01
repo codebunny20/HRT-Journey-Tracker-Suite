@@ -13,6 +13,7 @@
 - [ ] Add keyboard shortcuts (Save, View entries, Add/Remove row)
 - [ ] Persist window size/position (QSettings)
 - [ ] Add “Edit entry” flow (open selected entry, allow changes, save back)
+- [x] Document the workspace Launcher behavior (discovery rules, shortcuts, diagnostics)
 
 ## Phase 2 — Search, filtering, and overview
 - [ ] Filters in View Entries (date range, medication name, route)

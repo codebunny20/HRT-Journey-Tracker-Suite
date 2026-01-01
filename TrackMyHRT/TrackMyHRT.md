@@ -145,6 +145,22 @@ Medication object fields:
 
 ---
 
+## Launcher (workspace)
+
+If you’re using the workspace **Launcher** app, TrackMyHRT should appear automatically as a launch button.
+
+The Launcher discovers apps by scanning workspace subfolders and selecting an “entry script” using this priority:
+1) `<FolderName>.py` (name match is tolerant of spaces/`_`/`-`)  
+2) `main.py` / `app.py` / `run.py`  
+3) if only one `*.py` exists at the folder root, it uses that
+
+If TrackMyHRT does not appear:
+- Ensure `TrackMyHRT/HRT.py` exists and is the intended entrypoint
+- Ensure the folder is not named to collide with an excluded directory name (like `storage`, `assets`, `build`, etc.)
+- Ensure PySide6 is installed in the Python environment the Launcher is using
+
+---
+
 ## Notes / limitations (current)
 - Local storage only (no cloud sync).
 - Delete is permanent (no undo).

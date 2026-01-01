@@ -94,6 +94,12 @@ py ".\Journey Journal\JJ.py"
 py ".\TrackMyHRT\HRT.py"
 ```
 
+### Run the Launcher (dev)
+
+```powershell
+py ".\Launcher.py"
+```
+
 ## Packaging (PyInstaller)
 
 Both apps support two build methods:
@@ -191,6 +197,58 @@ Remove-Item "$env:LOCALAPPDATA\IconCache.db" -ErrorAction SilentlyContinue
 Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache*" -ErrorAction SilentlyContinue
 start explorer.exe
 ```
+
+## Launcher (workspace app picker)
+
+The workspace includes a **Launcher** app (`Launcher/Launcher.py`) that scans the workspace and shows a button for each “launchable” app it discovers.
+
+### What the Launcher does
+- **Auto-discovers apps** by scanning the workspace root subfolders.
+- Shows a simple **Apps** panel with one button per discovered app.
+- Tracks **Recent activity** (when each app was last opened) via **QSettings**.
+- Runs quick **diagnostics** before launching to surface common issues early (syntax errors, missing dependencies).
+- Supports **keyboard shortcuts** for refresh/open/quit and per-app launch.
+
+### Discovery rules (how it finds apps)
+The Launcher scans folders under the workspace root (default max depth: **2**) and ignores known non-app folders like:
+- `launcher`, `.git`, `__pycache__`, `build`, `dist`, `storage`, `assets`, `.venv`, `venv`
+
+It also ignores some common non-entry files like:
+- `__init__.py`, `setup.py`, `conftest.py`
+
+### Entry script selection heuristic (important)
+For each candidate app folder, the Launcher picks an entry script deterministically (to avoid launching random helper modules):
+
+Priority order:
+1. **`<FolderName>.py`** (ignoring spaces / `_` / `-` differences)  
+   Example: folder `TrackMyHRT/` → prefers `TrackMyHRT/HRT.py` only if it matches folder name normalization rules; otherwise falls back to the next rules.
+2. Otherwise, one of these common entrypoint names if present:
+   - `main.py`, `app.py`, `run.py`
+3. Otherwise, if there is **exactly one** `*.py` file at the folder root, it uses that.
+
+Depth-2 fallback:
+- If a top-level folder doesn’t contain an entry script, the Launcher can look **one folder deeper** and use a nested entry script **only if exactly one nested candidate is found**.
+
+### Diagnostics (what “Status” is checking)
+Before launching, the Launcher runs:
+- `python -m py_compile <script>` to catch syntax/import-time errors
+- `python -c "import PySide6"` to detect a missing PySide6 dependency
+
+If something fails, the Launcher shows a clear error dialog explaining what to fix.
+
+### Shortcuts
+Global:
+- **F5**: Refresh discovered apps
+- **Alt+O**: Open workspace folder
+- **Ctrl+Q**: Quit Launcher
+
+Per-app:
+- The Launcher attempts to assign **Alt+<letter>** shortcuts automatically based on the app name (first unused A–Z letter).
+
+### Notes / limitations
+- Launching uses the **current Python interpreter** (`sys.executable`).
+- The launched app’s **working directory** is set to the script’s folder.
+- The Launcher can prompt before starting **duplicate instances** of the same app.
 
 ## Development approach (why two apps)
 

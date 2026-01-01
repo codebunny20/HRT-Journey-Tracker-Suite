@@ -17,10 +17,62 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QHeaderView
 
+# --- additions: theme + status animation ---
+from PySide6.QtCore import QSettings, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QLabel, QGraphicsOpacityEffect
+
 APP_NAME = "Journey Journal"
 ORG_NAME = "HRTJourneyTracker"
 DATA_FILENAME = "j_j.json"
 STORAGE_DIRNAME = "storage"  # match TrackMyHRT/main.py pattern
+
+# --- additions: theme helpers ---
+SETTINGS_THEME_KEY = "ui/theme"  # "dark" | "light"
+
+DARK_STYLESHEET = """
+QWidget { background: #121212; color: #eaeaea; }
+QGroupBox { border: 1px solid #2a2a2a; margin-top: 8px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QDateEdit {
+  background: #1e1e1e; border: 1px solid #2a2a2a; padding: 6px; border-radius: 4px;
+}
+QPushButton { background: #2b2b2b; border: 1px solid #3a3a3a; padding: 6px 10px; border-radius: 4px; }
+QPushButton:hover { background: #333333; }
+QTableView, QTableWidget { background: #141414; alternate-background-color: #171717; gridline-color: #2a2a2a; }
+QHeaderView::section { background: #1b1b1b; border: 1px solid #2a2a2a; padding: 6px; }
+QMenuBar, QMenu { background: #161616; color: #eaeaea; }
+QMenu::item:selected { background: #2a2a2a; }
+QStatusBar { background: #161616; }
+"""
+
+LIGHT_STYLESHEET = """
+QWidget { background: #fafafa; color: #1b1b1b; }
+QGroupBox { border: 1px solid #d7d7d7; margin-top: 8px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QDateEdit {
+  background: #ffffff; border: 1px solid #cfcfcf; padding: 6px; border-radius: 4px;
+}
+QPushButton { background: #f0f0f0; border: 1px solid #cfcfcf; padding: 6px 10px; border-radius: 4px; }
+QPushButton:hover { background: #e9e9e9; }
+QTableView, QTableWidget { background: #ffffff; alternate-background-color: #f6f6f6; gridline-color: #dedede; }
+QHeaderView::section { background: #f2f2f2; border: 1px solid #dedede; padding: 6px; }
+QMenuBar, QMenu { background: #f7f7f7; color: #1b1b1b; }
+QMenu::item:selected { background: #e9e9e9; }
+QStatusBar { background: #f7f7f7; }
+"""
+
+def _load_theme() -> str:
+    s = QSettings(ORG_NAME, APP_NAME)
+    return str(s.value(SETTINGS_THEME_KEY, "dark")).lower()
+
+def _save_theme(theme: str) -> None:
+    s = QSettings(ORG_NAME, APP_NAME)
+    s.setValue(SETTINGS_THEME_KEY, (theme or "dark").lower())
+
+def _apply_theme(app: QApplication, theme: str) -> None:
+    theme = (theme or "dark").lower()
+    app.setStyleSheet(DARK_STYLESHEET if theme == "dark" else LIGHT_STYLESHEET)
 
 def _ensure_storage_ready() -> Path:
     """
@@ -337,12 +389,29 @@ class HRTJournalWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.setStatusBar(self.statusBar())
+
+        # --- status label with fade animation ---
+        sb = self.statusBar()
+        self._status_label = QLabel("")
+        self._status_label.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._status_fx = QGraphicsOpacityEffect(self._status_label)
+        self._status_label.setGraphicsEffect(self._status_fx)
+        self._status_fx.setOpacity(1.0)
+        sb.addPermanentWidget(self._status_label, 1)
+
+        self._status_anim = QPropertyAnimation(self._status_fx, b"opacity", self)
+        self._status_anim.setDuration(180)
+        self._status_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._pending_status_text = ""
 
         app = QApplication.instance()
         if app:
             app.setOrganizationName(ORG_NAME)
             app.setApplicationName(APP_NAME)
+            _apply_theme(app, _load_theme())
+
+        # --- menu: View -> Theme ---
+        self._init_menus()
 
         self.data_path = _default_data_file()
 
@@ -355,7 +424,7 @@ class HRTJournalWindow(QMainWindow):
         main_layout = QVBoxLayout(main)
 
         tabs = QTabWidget()
-        main_layout.addWidget(tabs)
+        main_layout.addWidget(tabs, 1)  # stretch
 
         # -----------------------------
         # Tab 1: New entry
@@ -365,6 +434,7 @@ class HRTJournalWindow(QMainWindow):
 
         # --- Entry Form ---
         form_group = QGroupBox("New Journal Entry")
+        form_group.setMinimumWidth(420)  # side panel shouldn't collapse too much
         form_layout = QFormLayout()
 
         self.date_edit = QDateEdit()
@@ -415,7 +485,7 @@ class HRTJournalWindow(QMainWindow):
         ])
 
         self.notes_edit = QTextEdit()
-        self.notes_edit.setPlaceholderText("Write anything you want to remember about today...")
+        self.notes_edit.setPlaceholderText("Write anything you want to...")
 
         form_layout.addRow("Date:", self.date_edit)
         form_layout.addRow("Mood:", self.mood_combo)
@@ -430,7 +500,7 @@ class HRTJournalWindow(QMainWindow):
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QScrollArea.NoFrame)
         form_scroll.setWidget(form_group)
-        entry_layout.addWidget(form_scroll)
+        entry_layout.addWidget(form_scroll, 1)  # stretch
 
         entry_btn_row = QHBoxLayout()
         self.save_btn = QPushButton("Add Entry")
@@ -438,7 +508,7 @@ class HRTJournalWindow(QMainWindow):
 
         entry_btn_row.addStretch()
         entry_btn_row.addWidget(self.save_btn)
-        entry_layout.addLayout(entry_btn_row)
+        entry_layout.addLayout(entry_btn_row, 0)
 
         tabs.addTab(entry_tab, "New entry")
 
@@ -470,9 +540,12 @@ class HRTJournalWindow(QMainWindow):
         self.table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # slightly more responsive than always ResizeToContents
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setDefaultSectionSize(140)
+        self.table.horizontalHeader().setMinimumSectionSize(90)
         self.table.setWordWrap(False)
-        entries_layout.addWidget(self.table)
+        entries_layout.addWidget(self.table, 1)  # stretch
 
         tabs.addTab(entries_tab, "Entries")
 
@@ -485,6 +558,69 @@ class HRTJournalWindow(QMainWindow):
 
         # Start on "New entry" tab
         tabs.setCurrentIndex(0)
+
+    # --- additions: menus ---
+    def _init_menus(self):
+        view_menu = self.menuBar().addMenu("View")
+        theme_menu = view_menu.addMenu("Theme")
+
+        self._theme_dark_action = QAction("Dark", self, checkable=True)
+        self._theme_light_action = QAction("Light", self, checkable=True)
+
+        theme_menu.addAction(self._theme_dark_action)
+        theme_menu.addAction(self._theme_light_action)
+
+        cur = _load_theme()
+        self._theme_dark_action.setChecked(cur == "dark")
+        self._theme_light_action.setChecked(cur == "light")
+
+        self._theme_dark_action.triggered.connect(lambda: self._set_theme("dark"))
+        self._theme_light_action.triggered.connect(lambda: self._set_theme("light"))
+
+    def _set_theme(self, theme: str):
+        theme = (theme or "dark").lower()
+        _save_theme(theme)
+        app = QApplication.instance()
+        if app:
+            _apply_theme(app, theme)
+
+        # keep actions mutually exclusive without QActionGroup
+        self._theme_dark_action.blockSignals(True)
+        self._theme_light_action.blockSignals(True)
+        self._theme_dark_action.setChecked(theme == "dark")
+        self._theme_light_action.setChecked(theme == "light")
+        self._theme_dark_action.blockSignals(False)
+        self._theme_light_action.blockSignals(False)
+
+        self._set_status_text_animated(f"Theme: {theme.capitalize()}")
+
+    # --- additions: animated status ---
+    def _set_status_text_animated(self, text: str, timeout_ms: int = 2000):
+        from PySide6.QtCore import QTimer
+
+        self._pending_status_text = text
+
+        def _fade_in():
+            self._status_label.setText(self._pending_status_text)
+            self._status_anim.stop()
+            self._status_anim.setStartValue(0.0)
+            self._status_anim.setEndValue(1.0)
+            self._status_anim.start()
+
+        # avoid stacking signals
+        try:
+            self._status_anim.finished.disconnect()
+        except Exception:
+            pass
+
+        self._status_anim.stop()
+        self._status_anim.setStartValue(float(self._status_fx.opacity()))
+        self._status_anim.setEndValue(0.0)
+        self._status_anim.finished.connect(_fade_in)
+        self._status_anim.start()
+
+        if timeout_ms and timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, lambda: self._status_label.setText(""))
 
     # -----------------------------
     # Persistence
@@ -566,7 +702,7 @@ class HRTJournalWindow(QMainWindow):
         self.model.replace_all(self.entries)
         self._save_data()
 
-        self.statusBar().showMessage("Saved.", 2000)
+        self._set_status_text_animated("Saved.", 2000)
 
         self.symptom_combo.setCurrentIndex(0)
         self.emotional_combo.setCurrentIndex(0)
@@ -587,7 +723,7 @@ class HRTJournalWindow(QMainWindow):
         self.model.remove_rows(rows)
         self.entries = self.model.entries  # keep reference consistent
         self._save_data()
-        self.statusBar().showMessage("Deleted.", 2000)
+        self._set_status_text_animated("Deleted.", 2000)
 
     def _format_entry_txt(self, e: JournalEntry) -> str:
         parts = [
@@ -680,6 +816,10 @@ class HRTJournalWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setOrganizationName(ORG_NAME)
+    app.setApplicationName(APP_NAME)
+    _apply_theme(app, _load_theme())
+
     window = HRTJournalWindow()
     window.show()
     sys.exit(app.exec())

@@ -37,12 +37,65 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
+# --- add ---
+from PySide6.QtCore import QSettings
+# --- end add ---
+
 
 APP_TITLE = "TrackMyHRT"
 org_name = "HRT Journey Tracker"
 DATA_FILENAME = "entries.json"  # <-- changed (was entries.jsonl)
 LEGACY_JSONL_FILENAME = "entries.jsonl"  # <-- add
 STORAGE_DIRNAME = "storage"
+
+# --- add: theme + settings ---
+SETTINGS_THEME_KEY = "ui/theme"  # "dark" | "light"
+THEME_DARK = "dark"
+THEME_LIGHT = "light"
+
+DARK_STYLESHEET = """
+QWidget { background: #121212; color: #eaeaea; }
+QGroupBox { border: 1px solid #2a2a2a; margin-top: 10px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #eaeaea; }
+QLineEdit, QPlainTextEdit, QDateEdit, QTimeEdit, QComboBox, QTableWidget {
+  background: #1b1b1b; color: #eaeaea; border: 1px solid #2a2a2a;
+}
+QHeaderView::section { background: #1b1b1b; color: #eaeaea; border: 1px solid #2a2a2a; padding: 4px; }
+QPushButton { background: #232323; border: 1px solid #2f2f2f; padding: 6px 10px; }
+QPushButton:hover { background: #2a2a2a; }
+QPushButton:pressed { background: #1f1f1f; }
+QMenuBar { background: #121212; }
+QMenu { background: #1b1b1b; border: 1px solid #2a2a2a; }
+QStatusBar { background: #121212; }
+"""
+
+LIGHT_STYLESHEET = """
+QWidget { background: #f6f6f6; color: #111; }
+QGroupBox { border: 1px solid #d0d0d0; margin-top: 10px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #111; }
+QLineEdit, QPlainTextEdit, QDateEdit, QTimeEdit, QComboBox, QTableWidget {
+  background: #ffffff; color: #111; border: 1px solid #cfcfcf;
+}
+QHeaderView::section { background: #efefef; color: #111; border: 1px solid #d0d0d0; padding: 4px; }
+QPushButton { background: #ffffff; border: 1px solid #cfcfcf; padding: 6px 10px; }
+QPushButton:hover { background: #f0f0f0; }
+QPushButton:pressed { background: #e6e6e6; }
+QMenuBar { background: #f6f6f6; }
+QMenu { background: #ffffff; border: 1px solid #cfcfcf; }
+QStatusBar { background: #f6f6f6; }
+"""
+
+def _apply_app_theme(theme: str, settings: QSettings | None = None, persist: bool = True) -> str:
+    t = (theme or "").strip().lower()
+    if t not in (THEME_DARK, THEME_LIGHT):
+        t = THEME_DARK
+    app = QApplication.instance()
+    if app is not None:
+        app.setStyleSheet(DARK_STYLESHEET if t == THEME_DARK else LIGHT_STYLESHEET)
+    if persist and settings is not None:
+        settings.setValue(SETTINGS_THEME_KEY, t)
+    return t
+# --- end add ---
 
 
 @dataclass
@@ -714,6 +767,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
 
+        # --- add: settings + load theme ---
+        self._settings = QSettings(org_name, APP_TITLE)
+        self._theme = str(self._settings.value(SETTINGS_THEME_KEY, THEME_DARK) or THEME_DARK).lower()
+        self._theme = _apply_app_theme(self._theme, self._settings, persist=False)
+        # --- end add ---
+
         root = QWidget(self)
         self.setCentralWidget(root)
 
@@ -886,10 +945,44 @@ class MainWindow(QMainWindow):
         open_data_action.triggered.connect(self._open_data_folder_hint)
         file_menu.addAction(open_data_action)
 
+        # --- add: View → Theme menu ---
+        view_menu = self.menuBar().addMenu("&View")
+        theme_menu = view_menu.addMenu("&Theme")
+
+        self._theme_light_action = QAction("&Light", self)
+        self._theme_light_action.setCheckable(True)
+        self._theme_light_action.triggered.connect(lambda: self._set_theme(THEME_LIGHT))
+
+        self._theme_dark_action = QAction("&Dark", self)
+        self._theme_dark_action.setCheckable(True)
+        self._theme_dark_action.triggered.connect(lambda: self._set_theme(THEME_DARK))
+
+        theme_menu.addAction(self._theme_light_action)
+        theme_menu.addAction(self._theme_dark_action)
+
+        self._sync_theme_actions()
+        # --- end add ---
+
         # Start with one empty medication row
         self._add_med_row()
         self.meds_table.clearSelection()
         self.meds_table.setCurrentCell(-1, -1)
+
+    # --- add: theme helpers ---
+    def _set_theme(self, theme: str) -> None:
+        self._theme = _apply_app_theme(theme, self._settings, persist=True)
+        self._sync_theme_actions()
+
+    def _sync_theme_actions(self) -> None:
+        if not hasattr(self, "_theme_light_action"):
+            return
+        self._theme_light_action.blockSignals(True)
+        self._theme_dark_action.blockSignals(True)
+        self._theme_light_action.setChecked(self._theme == THEME_LIGHT)
+        self._theme_dark_action.setChecked(self._theme == THEME_DARK)
+        self._theme_light_action.blockSignals(False)
+        self._theme_dark_action.blockSignals(False)
+    # --- end add ---
 
     def _open_data_folder_hint(self):
         QMessageBox.information(
@@ -1090,7 +1183,19 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # --- add: ensure QSettings identity is set early ---
+    QApplication.setOrganizationName(org_name)
+    QApplication.setApplicationName(APP_TITLE)
+    # --- end add ---
+
     app = QApplication(sys.argv)
+
+    # --- add: apply theme before showing UI (uses same settings keys) ---
+    settings = QSettings(org_name, APP_TITLE)
+    theme = str(settings.value(SETTINGS_THEME_KEY, THEME_DARK) or THEME_DARK).lower()
+    _apply_app_theme(theme, settings, persist=False)
+    # --- end add ---
+
     win = MainWindow()
     win.resize(900, 650)
     win.show()
