@@ -37,10 +37,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
-# --- add ---
 from PySide6.QtCore import QSettings
-# --- end add ---
 
+# --- add: MultiSelectCombo support (same UX as symptoms) ---
+from PySide6.QtCore import QEvent
+from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtWidgets import QToolButton, QMenu, QWidgetAction
+# --- end add ---
 
 APP_TITLE = "TrackMyHRT"
 org_name = "HRT Journey Tracker"
@@ -48,7 +51,6 @@ DATA_FILENAME = "entries.json"  # <-- changed (was entries.jsonl)
 LEGACY_JSONL_FILENAME = "entries.jsonl"  # <-- add
 STORAGE_DIRNAME = "storage"
 
-# --- add: theme + settings ---
 SETTINGS_THEME_KEY = "ui/theme"  # "dark" | "light"
 THEME_DARK = "dark"
 THEME_LIGHT = "light"
@@ -95,8 +97,6 @@ def _apply_app_theme(theme: str, settings: QSettings | None = None, persist: boo
     if persist and settings is not None:
         settings.setValue(SETTINGS_THEME_KEY, t)
     return t
-# --- end add ---
-
 
 @dataclass
 class MedicationRow:
@@ -105,7 +105,6 @@ class MedicationRow:
     unit: str
     route: str
     time: str  # "HH:mm"
-
 
 def _ensure_storage_ready() -> str:
     """
@@ -257,6 +256,76 @@ def _upsert_entry(updated: Dict[str, Any]) -> None:
 
     _write_entries_json_atomic(path, entries)
 
+# --- add: multi-select combo widget (checklist dropdown) ---
+class MultiSelectCombo(QToolButton):
+    def __init__(self, options: List[str], placeholder: str = "", parent=None):
+        super().__init__(parent)
+        self._placeholder = placeholder or "Select…"
+        self._menu = QMenu(self)
+        self._model = QStandardItemModel(self)
+
+        # allow clicking menu items without auto-closing
+        self._menu.installEventFilter(self)
+
+        for opt in options:
+            if not opt:
+                continue
+            item = QStandardItem(opt)
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item.setData(Qt.Unchecked, Qt.CheckStateRole)
+            self._model.appendRow(item)
+
+            act = QWidgetAction(self._menu)
+            cb = QToolButton(self._menu)
+            cb.setText(opt)
+            cb.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            cb.setCheckable(True)
+            cb.setChecked(False)
+            cb.clicked.connect(lambda checked, it=item: self._toggle_item(it, checked))
+            act.setDefaultWidget(cb)
+            self._menu.addAction(act)
+
+        self.setMenu(self._menu)
+        self.setPopupMode(QToolButton.InstantPopup)
+        self._sync_text()
+
+    def eventFilter(self, obj, event):
+        if obj is self._menu and event.type() in (QEvent.MouseButtonRelease, QEvent.MouseButtonPress):
+            return True  # keep menu open while selecting multiple items
+        return super().eventFilter(obj, event)
+
+    def _toggle_item(self, item: QStandardItem, checked: bool):
+        item.setData(Qt.Checked if checked else Qt.Unchecked, Qt.CheckStateRole)
+        self._sync_text()
+
+    def _sync_text(self):
+        vals = self.values()
+        self.setText(", ".join(vals) if vals else self._placeholder)
+
+    def values(self) -> List[str]:
+        out: List[str] = []
+        for r in range(self._model.rowCount()):
+            it = self._model.item(r)
+            if it and it.checkState() == Qt.Checked:
+                out.append(it.text())
+        return out
+
+    def set_values(self, values: List[str]):
+        wanted = set((v or "").strip() for v in (values or []) if (v or "").strip())
+        for r in range(self._model.rowCount()):
+            it = self._model.item(r)
+            if not it:
+                continue
+            it.setData(Qt.Checked if it.text() in wanted else Qt.Unchecked, Qt.CheckStateRole)
+        for act in self._menu.actions():
+            if isinstance(act, QWidgetAction):
+                w = act.defaultWidget()
+                if isinstance(w, QToolButton):
+                    w.blockSignals(True)
+                    w.setChecked(w.text() in wanted)
+                    w.blockSignals(False)
+        self._sync_text()
+# --- end add ---
 
 class CalendarDialog(QDialog):
     def __init__(self, initial_date: QDate, parent=None):
@@ -279,7 +348,6 @@ class CalendarDialog(QDialog):
 
     def selected_date(self) -> QDate:
         return self.calendar.selectedDate()
-
 
 class ViewEntriesDialog(QDialog):
     def __init__(self, parent=None):
@@ -370,6 +438,13 @@ class ViewEntriesDialog(QDialog):
                 parts.append(s)
         return "; ".join(parts)
 
+    # --- add: list-or-string formatter (for backward compatibility) ---
+    def _listish_to_text(self, val: Any) -> str:
+        if isinstance(val, list):
+            return ", ".join(str(x) for x in val if str(x).strip())
+        return str(val or "").strip()
+    # --- end add ---
+
     def _refresh(self):
         self._entries = self._load_entries()
         self.table.setRowCount(0)
@@ -380,8 +455,8 @@ class ViewEntriesDialog(QDialog):
 
             ts = str(entry.get("timestamp_local") or "")
             meds = self._meds_summary(entry.get("medications"))
-            mood = str(entry.get("mood") or "")
-            symptoms = str(entry.get("symptoms") or "")
+            mood = self._listish_to_text(entry.get("mood"))
+            symptoms = self._listish_to_text(entry.get("symptoms"))
             notes = str(entry.get("notes") or "")
 
             for col, text in enumerate([ts, meds, mood, symptoms, notes]):
@@ -442,8 +517,14 @@ class ViewEntriesDialog(QDialog):
         ts = str(entry.get("timestamp_local") or "").strip()
         date = str(entry.get("date") or "").strip()
         time = str(entry.get("time") or "").strip()
-        mood = str(entry.get("mood") or "").strip()
-        symptoms = str(entry.get("symptoms") or "").strip()
+
+        # --- change: support list-or-string fields + include energy ---
+        mood = self._listish_to_text(entry.get("mood"))
+        energy = self._listish_to_text(entry.get("energy"))
+        symptoms = self._listish_to_text(entry.get("symptoms"))
+        libido = self._listish_to_text(entry.get("libido"))
+        # --- end change ---
+
         notes = str(entry.get("notes") or "").rstrip()
 
         lines: List[str] = []
@@ -474,7 +555,6 @@ class ViewEntriesDialog(QDialog):
                 if name:
                     parts.append(name)
                 if dose not in (None, "", 0, 0.0):
-                    # keep numeric formatting stable-ish
                     try:
                         parts.append(f"{float(dose):g}")
                     except Exception:
@@ -496,7 +576,9 @@ class ViewEntriesDialog(QDialog):
         lines.append("Mood / Symptoms")
         lines.append("-" * 40)
         lines.append(f"Mood:     {mood if mood else '(none)'}")
+        lines.append(f"Energy:   {energy if energy else '(none)'}")
         lines.append(f"Symptoms: {symptoms if symptoms else '(none)'}")
+        lines.append(f"Libido:   {libido if libido else '(none)'}")
         lines.append("")
 
         lines.append("Notes")
@@ -533,13 +615,17 @@ class ViewEntriesDialog(QDialog):
         dlg.exec()
 
     def _format_entry_txt(self, entry: Dict[str, Any]) -> str:
-        # (moved from MainWindow)
         ts = str(entry.get("timestamp_local") or "").strip()
         date = str(entry.get("date") or "").strip()
         time = str(entry.get("time") or "").strip()
-        mood = str(entry.get("mood") or "").strip()
-        symptoms = str(entry.get("symptoms") or "").strip()
-        libido = str(entry.get("libido") or "").strip()
+
+        # --- change: support list-or-string fields + include energy ---
+        mood = self._listish_to_text(entry.get("mood"))
+        energy = self._listish_to_text(entry.get("energy"))
+        symptoms = self._listish_to_text(entry.get("symptoms"))
+        libido = self._listish_to_text(entry.get("libido"))
+        # --- end change ---
+
         notes = str(entry.get("notes") or "").rstrip()
 
         meds_lines: List[str] = []
@@ -589,6 +675,7 @@ class ViewEntriesDialog(QDialog):
             "Mood / Symptoms",
             "-" * 40,
             f"Mood:     {mood if mood else '(none)'}",
+            f"Energy:   {energy if energy else '(none)'}",
             f"Symptoms: {symptoms if symptoms else '(none)'}",
             f"Libido:   {libido if libido else '(none)'}",
             "",
@@ -599,12 +686,16 @@ class ViewEntriesDialog(QDialog):
         return "\n".join([p for p in parts if p is not None])
 
     def _format_entry_md(self, entry: Dict[str, Any]) -> str:
-        # (moved from MainWindow)
         ts = str(entry.get("timestamp_local") or "").strip()
         date = str(entry.get("date") or "").strip() or (ts.split(" ")[0] if ts else "")
-        mood = str(entry.get("mood") or "").strip()
-        symptoms = str(entry.get("symptoms") or "").strip()
-        libido = str(entry.get("libido") or "").strip()
+
+        # --- change: support list-or-string fields + include energy ---
+        mood = self._listish_to_text(entry.get("mood"))
+        energy = self._listish_to_text(entry.get("energy"))
+        symptoms = self._listish_to_text(entry.get("symptoms"))
+        libido = self._listish_to_text(entry.get("libido"))
+        # --- end change ---
+
         notes = (str(entry.get("notes") or "")).rstrip() or "(none)"
 
         meds = entry.get("medications")
@@ -645,6 +736,7 @@ class ViewEntriesDialog(QDialog):
             + "\n".join(meds_lines)
             + "\n\n"
             + f"- **Mood:** {mood or '(none)'}\n"
+            + f"- **Energy:** {energy or '(none)'}\n"
             + f"- **Symptoms:** {symptoms or '(none)'}\n"
             + f"- **Libido:** {libido or '(none)'}\n\n"
             + "### Notes\n\n"
@@ -706,7 +798,6 @@ class ViewEntriesDialog(QDialog):
 
         QMessageBox.information(self, "Exported", f"Exported to:\n{out_path}")
 
-
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -732,7 +823,7 @@ class HelpDialog(QDialog):
             "- Click “Remove selected” to delete highlighted row(s).\n"
             "\n"
             "Mood / Symptoms / Notes\n"
-            "- Mood and Symptoms are optional and can be typed or chosen.\n"
+            "- Mood, Energy, Symptoms, and Libido support selecting multiple items.\n"
             "- Notes are optional; use for anything you want to remember.\n"
             "\n"
             "Saving\n"
@@ -761,17 +852,14 @@ class HelpDialog(QDialog):
 
         self.resize(760, 520)
 
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
 
-        # --- add: settings + load theme ---
         self._settings = QSettings(org_name, APP_TITLE)
         self._theme = str(self._settings.value(SETTINGS_THEME_KEY, THEME_DARK) or THEME_DARK).lower()
         self._theme = _apply_app_theme(self._theme, self._settings, persist=False)
-        # --- end add ---
 
         root = QWidget(self)
         self.setCentralWidget(root)
@@ -795,7 +883,6 @@ class MainWindow(QMainWindow):
         self.now_btn.setToolTip("Set date/time to current")
         self.now_btn.clicked.connect(self._set_now)
 
-        # Replace emoji-only button with clearer text button
         self.pick_date_btn = QPushButton("Pick date…", self)
         self.pick_date_btn.setToolTip("Open calendar")
         self.pick_date_btn.clicked.connect(self._open_calendar)
@@ -811,14 +898,12 @@ class MainWindow(QMainWindow):
         top_row.addWidget(self.now_btn)
         top_row.addStretch(1)
 
-        # Visually separate the date/time controls
         dt_group = QGroupBox("Quick entry")
         dt_layout = QVBoxLayout()
         dt_layout.setContentsMargins(10, 10, 10, 10)
         dt_layout.addLayout(top_row)
         dt_group.setLayout(dt_layout)
 
-        # Medications table
         self.meds_table = QTableWidget(0, 5, self)
         self.meds_table.setHorizontalHeaderLabels(["Name", "Dose", "Unit", "Route", "Time"])
         self.meds_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -848,14 +933,16 @@ class MainWindow(QMainWindow):
         meds_layout.addLayout(meds_btns)
         meds_group.setLayout(meds_layout)
 
-        # Common dropdown options (tweak as you like)
         self.unit_options = ["", "mg", "mcg", "g", "mL", "IU", "patch", "pump", "tablet"]
         self.route_options = ["", "Oral", "Sublingual", "Transdermal", "Injection (IM)", "Injection (SC)", "Topical", "Other"]
-        self.mood_options = ["", "Calm", "Happy", "Anxious", "Irritable", "Low", "Energetic", "Tired"]
+
+        # --- change: move energetic/tired to energy; keep mood focused on mood ---
+        self.mood_options = ["", "Calm", "Happy", "Anxious", "Irritable", "Low"]
+        self.energy_options = ["", "Energetic", "Tired", "Normal", "Wired", "Exhausted"]
         self.symptom_options = ["", "None", "Headache", "Nausea", "Hot flashes", "Dizziness", "Breast tenderness", "Cramps"]
         self.libido_options = ["", "Very low", "Low", "Normal", "High", "Very high"]
+        # --- end change ---
 
-        # HRT medication dropdown options (editable)
         self.med_name_options = [
             "",
             "Estradiol",
@@ -873,7 +960,6 @@ class MainWindow(QMainWindow):
             "Other",
         ]
 
-        # Common HRT dose sizes (editable dropdown; numeric parsing handled on save)
         self.dose_options = [
             "",
             "0.5", "1", "2", "4", "6", "8",
@@ -881,10 +967,28 @@ class MainWindow(QMainWindow):
             "0.1", "0.2", "0.3", "0.4",
         ]
 
-        # Mood / symptoms / notes
-        self.mood_edit = self._make_combo(self.mood_options, placeholder="Type or pick (optional)")
-        self.symptoms_edit = self._make_combo(self.symptom_options, placeholder="Type or pick (optional)")
-        self.libido_edit = self._make_combo(self.libido_options, placeholder="Type or pick (optional)")
+        # --- change: make mood/energy/libido look/work like symptoms (MultiSelectCombo) ---
+        self.mood_edit = MultiSelectCombo(
+            [s for s in self.mood_options if s],
+            placeholder="Select mood(s) (optional)",
+            parent=self,
+        )
+        self.energy_edit = MultiSelectCombo(
+            [s for s in self.energy_options if s],
+            placeholder="Select energy (optional)",
+            parent=self,
+        )
+        self.symptoms_edit = MultiSelectCombo(
+            [s for s in self.symptom_options if s and s != "None"],
+            placeholder="Select symptom(s) (optional)",
+            parent=self,
+        )
+        self.libido_edit = MultiSelectCombo(
+            [s for s in self.libido_options if s],
+            placeholder="Select libido (optional)",
+            parent=self,
+        )
+        # --- end change ---
 
         self.notes_edit = QPlainTextEdit(self)
         self.notes_edit.setPlaceholderText("Notes (optional)")
@@ -897,15 +1001,14 @@ class MainWindow(QMainWindow):
         extras_form.setHorizontalSpacing(12)
         extras_form.setVerticalSpacing(10)
         extras_form.addRow("Mood:", self.mood_edit)
+        extras_form.addRow("Energy:", self.energy_edit)
         extras_form.addRow("Symptoms:", self.symptoms_edit)
         extras_form.addRow("Libido:", self.libido_edit)
 
-        # Make notes area feel less cramped
         self.notes_edit.setMinimumHeight(120)
         extras_form.addRow("Notes:", self.notes_edit)
         extras_group.setLayout(extras_form)
 
-        # Save row
         self.save_btn = QPushButton("Save entry", self)
         self.save_btn.clicked.connect(self._save_entry)
 
@@ -929,7 +1032,6 @@ class MainWindow(QMainWindow):
         save_row.addWidget(self.clear_btn)
         save_row.addWidget(self.save_btn)
 
-        # Compose main layout
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(12)
@@ -939,13 +1041,11 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(save_row)
         root.setLayout(main_layout)
 
-        # Menu (optional but useful)
         file_menu = self.menuBar().addMenu("&File")
         open_data_action = QAction("Open data folder", self)
         open_data_action.triggered.connect(self._open_data_folder_hint)
         file_menu.addAction(open_data_action)
 
-        # --- add: View → Theme menu ---
         view_menu = self.menuBar().addMenu("&View")
         theme_menu = view_menu.addMenu("&Theme")
 
@@ -961,14 +1061,11 @@ class MainWindow(QMainWindow):
         theme_menu.addAction(self._theme_dark_action)
 
         self._sync_theme_actions()
-        # --- end add ---
 
-        # Start with one empty medication row
         self._add_med_row()
         self.meds_table.clearSelection()
         self.meds_table.setCurrentCell(-1, -1)
 
-    # --- add: theme helpers ---
     def _set_theme(self, theme: str) -> None:
         self._theme = _apply_app_theme(theme, self._settings, persist=True)
         self._sync_theme_actions()
@@ -982,7 +1079,6 @@ class MainWindow(QMainWindow):
         self._theme_dark_action.setChecked(self._theme == THEME_DARK)
         self._theme_light_action.blockSignals(False)
         self._theme_dark_action.blockSignals(False)
-    # --- end add ---
 
     def _open_data_folder_hint(self):
         QMessageBox.information(
@@ -1011,14 +1107,9 @@ class MainWindow(QMainWindow):
         return cb
 
     def _combo_current_text(self, cb: QComboBox) -> str:
-        # Prefer what the user typed if editable
         return (cb.currentText() or "").strip()
 
     def _parse_dose(self, dose_text: str) -> float:
-        """
-        Keeps JSON 'dose' numeric.
-        Accepts '2', '2.0', '2 mg', ' 2,5 ' (comma -> dot). Raises ValueError if no number found.
-        """
         s = (dose_text or "").strip()
         if not s:
             return 0.0
@@ -1032,28 +1123,23 @@ class MainWindow(QMainWindow):
         row = self.meds_table.rowCount()
         self.meds_table.insertRow(row)
 
-        # Name (dropdown)
         name_cb = self._make_combo(self.med_name_options, placeholder="Medication")
         self.meds_table.setCellWidget(row, 0, name_cb)
 
-        # Dose (dropdown)
         dose_cb = self._make_combo(self.dose_options, placeholder="Dose")
         self.meds_table.setCellWidget(row, 1, dose_cb)
 
-        # Unit (dropdown)
         unit_cb = self._make_combo(self.unit_options, placeholder="Unit")
         self.meds_table.setCellWidget(row, 2, unit_cb)
 
-        # Route (dropdown)
         route_cb = self._make_combo(self.route_options, placeholder="Route")
         self.meds_table.setCellWidget(row, 3, route_cb)
 
-        # Time (default: top time)
         time_item = QTableWidgetItem(self.time_edit.time().toString("HH:mm"))
         time_item.setTextAlignment(Qt.AlignCenter)
         self.meds_table.setItem(row, 4, time_item)
 
-        self.meds_table.setCurrentCell(row, 1)  # start at dose since name is a widget now
+        self.meds_table.setCurrentCell(row, 1)
 
     def _remove_selected_rows(self):
         selected = self.meds_table.selectionModel().selectedRows()
@@ -1103,6 +1189,16 @@ class MainWindow(QMainWindow):
     def _validate_can_save(self, meds: List[MedicationRow]) -> bool:
         return any(m.name.strip() for m in meds)
 
+    # --- add: multi-select accessor (store as JSON lists) ---
+    def _multiselect_values(self, w: Any) -> List[str]:
+        if isinstance(w, MultiSelectCombo):
+            return w.values()
+        if isinstance(w, QComboBox):
+            txt = self._combo_current_text(w)
+            return [t.strip() for t in txt.split(",") if t.strip()] if txt else []
+        return []
+    # --- end add ---
+
     def _save_entry(self):
         try:
             meds = self._collect_medications()
@@ -1124,7 +1220,7 @@ class MainWindow(QMainWindow):
         ts = dt.strftime("%Y-%m-%d %H:%M")
 
         record: Dict[str, Any] = {
-            "id": uuid.uuid4().hex,  # <-- stable id for edit/delete
+            "id": uuid.uuid4().hex,
             "created_at": ts,
             "updated_at": ts,
             "timestamp_local": ts,
@@ -1135,9 +1231,12 @@ class MainWindow(QMainWindow):
                 for m in meds
                 if any([m.name.strip(), m.dose, m.unit.strip(), m.route.strip(), m.time.strip()])
             ],
-            "mood": self._combo_current_text(self.mood_edit),
-            "symptoms": self._combo_current_text(self.symptoms_edit),
-            "libido": self._combo_current_text(self.libido_edit),
+            # --- change: store as lists ---
+            "mood": self._multiselect_values(self.mood_edit),
+            "energy": self._multiselect_values(self.energy_edit),
+            "symptoms": self._multiselect_values(self.symptoms_edit),
+            "libido": self._multiselect_values(self.libido_edit),
+            # --- end change ---
             "notes": self.notes_edit.toPlainText().rstrip(),
         }
 
@@ -1159,10 +1258,17 @@ class MainWindow(QMainWindow):
             self.date_edit.setDate(QDate.currentDate())
             self.time_edit.setTime(QTime.currentTime())
 
-        # reset dropdowns + notes
-        self.mood_edit.setCurrentIndex(0)
-        self.symptoms_edit.setCurrentIndex(0)
-        self.libido_edit.setCurrentIndex(0)
+        # --- change: clear multi-selects like symptoms ---
+        if isinstance(self.mood_edit, MultiSelectCombo):
+            self.mood_edit.set_values([])
+        if isinstance(self.energy_edit, MultiSelectCombo):
+            self.energy_edit.set_values([])
+        if isinstance(self.symptoms_edit, MultiSelectCombo):
+            self.symptoms_edit.set_values([])
+        if isinstance(self.libido_edit, MultiSelectCombo):
+            self.libido_edit.set_values([])
+        # --- end change ---
+
         self.notes_edit.clear()
 
         self.meds_table.setRowCount(0)
@@ -1181,26 +1287,20 @@ class MainWindow(QMainWindow):
         dlg = HelpDialog(self)
         dlg.exec()
 
-
 def main():
-    # --- add: ensure QSettings identity is set early ---
     QApplication.setOrganizationName(org_name)
     QApplication.setApplicationName(APP_TITLE)
-    # --- end add ---
 
     app = QApplication(sys.argv)
 
-    # --- add: apply theme before showing UI (uses same settings keys) ---
     settings = QSettings(org_name, APP_TITLE)
     theme = str(settings.value(SETTINGS_THEME_KEY, THEME_DARK) or THEME_DARK).lower()
     _apply_app_theme(theme, settings, persist=False)
-    # --- end add ---
 
     win = MainWindow()
     win.resize(900, 650)
     win.show()
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()
