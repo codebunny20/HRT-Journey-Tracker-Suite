@@ -1,18 +1,19 @@
 # TrackMyHRT
 
-A lightweight, local-first **HRT journey tracker** for logging medication dosing and optional daily context (mood, symptoms, libido, notes). Built with **Python + PySide6 (Qt)**.
+A lightweight, local-first **HRT journey tracker** for logging medication dosing and optional daily context (mood, energy, symptoms, libido, notes). Built with **Python + PySide6 (Qt)**.
 
 ## What it does (overview)
 
 TrackMyHRT lets you:
 - Create a timestamped entry (date + time)
 - Add one or more medication rows (name, dose, unit, route, time)
-- Optionally record mood, symptoms, libido, and free-form notes
-- Save entries locally to a simple **JSON Lines** file (`.jsonl`)
-- Browse, view, and delete previously saved entries
+- Optionally record mood/energy/symptoms/libido (multi-select) and free-form notes
+- Save entries locally to a simple **JSON** file (JSON array)
+- Browse, view, delete, and export previously saved entries
 
 All data is stored locally on your machine in the app’s `storage` folder.
-The `storage` file will be created on your first entrie save.
+The storage file will be created on your first entry save.
+
 ---
 
 ## Current features
@@ -40,21 +41,27 @@ Each entry can contain multiple medication rows with:
 
 **Validation rule:** You must provide **at least one medication name** (across all rows) to save an entry.
 
-### 3) Mood / Symptoms / Libido / Notes
+### 3) Mood / Energy / Symptoms / Libido / Notes
 All optional:
-- **Mood**: editable dropdown (type or pick)
-- **Symptoms**: editable dropdown (type or pick)
-- **Libido**: editable dropdown (type or pick)
+- **Mood**: multi-select dropdown
+- **Energy**: multi-select dropdown
+- **Symptoms**: multi-select dropdown
+- **Libido**: multi-select dropdown
 - **Notes**: free-form multi-line text
 
+> Stored format: mood/energy/symptoms/libido are saved as JSON **arrays of strings** (lists).  
+> The app still displays older saved entries that used strings.
+
 ### 4) Saving
-- **Save entry** appends a record to the data file as one JSON object per line (JSONL)
+- **Save entry** appends a record to the data file
 - Automatically stores:
+  - `id` (unique id)
+  - `created_at`, `updated_at`
   - `timestamp_local` (sortable string like `2025-12-29 14:05`)
   - `date` (`YYYY-MM-DD`)
   - `time` (`HH:mm`)
   - medications array
-  - mood/symptoms/libido/notes
+  - mood/energy/symptoms/libido/notes
 
 ### 5) Viewing & managing entries
 Open **View entries** to see a table of saved entries:
@@ -70,8 +77,17 @@ Actions:
 - **Double-click** a row or click **View** to open a full, readable view
 - **Details** shows the raw JSON for the entry
 - **Delete** permanently removes the selected entry (with confirmation)
+- **Export…** exports all loaded entries to:
+  - JSON Lines (`.jsonl`)
+  - JSON (`.json`)
+  - Text (`.txt`)
+  - Markdown (`.md`)
 
-### 6) Help screen
+### 6) Theme
+- Menu: **View → Theme → Dark/Light**
+- Theme choice is saved via app settings.
+
+### 7) Help screen
 The **Help** button opens an in-app help dialog that summarizes:
 - Date/time usage
 - Medication entry rules and dose parsing examples
@@ -79,10 +95,13 @@ The **Help** button opens an in-app help dialog that summarizes:
 - How the viewer works
 - Data location hint
 
-### 7) Data location
+### 8) Data location
 Data is stored in an app-local folder:
 
-- `storage/entries.jsonl`
+- `storage/entries.json`
+
+Legacy support:
+- If `storage/entries.json` is empty/missing and `storage/entries.jsonl` exists, the app will **migrate** JSONL → JSON automatically (one-time best-effort).
 
 You can see the exact path via:
 - Menu: **File → Open data folder** (shows the full entries file path)
@@ -91,21 +110,23 @@ You can see the exact path via:
 
 ---
 
-## Data format (JSON Lines)
+## Data format
 
-Entries are stored as **JSON Lines (JSONL)**:
-- One JSON object per line
-- Easy to append, diff, and parse
+### Current storage format (JSON array)
+Entries are stored as a single JSON file containing an **array** of entry objects.
 
-### Schema (current)
 Top-level fields:
+- `id` (string)
+- `created_at` (string, `YYYY-MM-DD HH:mm`)
+- `updated_at` (string, `YYYY-MM-DD HH:mm`)
 - `timestamp_local` (string, `YYYY-MM-DD HH:mm`)
 - `date` (string, `YYYY-MM-DD`)
 - `time` (string, `HH:mm`)
 - `medications` (array of objects)
-- `mood` (string, optional)
-- `symptoms` (string, optional)
-- `libido` (string, optional)
+- `mood` (array of strings, optional)
+- `energy` (array of strings, optional)
+- `symptoms` (array of strings, optional)
+- `libido` (array of strings, optional)
 - `notes` (string, optional)
 
 Medication object fields:
@@ -115,22 +136,11 @@ Medication object fields:
 - `route` (string)
 - `time` (string, `HH:mm`)
 
-### Example record
-```json
-{
-  "timestamp_local": "2025-12-29 14:05",
-  "date": "2025-12-29",
-  "time": "14:05",
-  "medications": [
-    { "name": "Estradiol", "dose": 2.0, "unit": "mg", "route": "Sublingual", "time": "14:05" },
-    { "name": "Spironolactone", "dose": 50.0, "unit": "mg", "route": "Oral", "time": "09:00" }
-  ],
-  "mood": "Calm",
-  "symptoms": "None",
-  "libido": "Normal",
-  "notes": "Felt steady today. No headache."
-}
-```
+### Legacy format (JSON Lines)
+Older versions used:
+- `storage/entries.jsonl` (one JSON object per line)
+
+This is still supported for migration.
 
 ---
 
@@ -139,9 +149,9 @@ Medication object fields:
 2. In **Medications**, click **Add medication** if needed.
 3. Fill at least one medication **Name** (required to save).
 4. Optionally fill **Dose**, **Unit**, **Route**, **Time** per row.
-5. Optionally add **Mood**, **Symptoms**, **Libido**, and **Notes**.
+5. Optionally select **Mood/Energy/Symptoms/Libido** and add **Notes**.
 6. Click **Save entry**.
-7. Click **View entries** to browse, inspect, or delete entries.
+7. Click **View entries** to browse, inspect, delete, or export entries.
 
 ---
 
@@ -165,4 +175,5 @@ If TrackMyHRT does not appear:
 - Local storage only (no cloud sync).
 - Delete is permanent (no undo).
 - Dose parsing stores the first numeric value found in the dose field.
-- Data file is append-only except when deleting an entry (rewrites the file without the deleted line).
+- Storage is a single JSON file (`entries.json`) written atomically (temp file + replace).
+- Export produces JSON/JSONL/TXT/MD files, but does not change your stored data file.

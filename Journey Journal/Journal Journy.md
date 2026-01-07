@@ -8,8 +8,8 @@ A small, local-first journal for tracking day-to-day HRT-related experiences (mo
 
 - **New entry form** with:
   - Date
-  - Mood
-  - Symptoms (single-select)
+  - Mood (optional)
+  - Symptoms (multi-select)
   - Emotional shifts
   - Pain / discomfort
   - Libido / arousal
@@ -19,7 +19,7 @@ A small, local-first journal for tracking day-to-day HRT-related experiences (mo
   - Quick refresh from disk
   - View full entry
   - Details (raw JSON)
-  - Delete selected entry
+  - Delete selected (supports one or more rows)
 - **Export** to:
   - JSON (`.json`)
   - Plain text (`.txt`)

@@ -217,6 +217,7 @@ class ViewJournalEntriesDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)  # allow multi-row delete
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.doubleClicked.connect(self._view_selected)
@@ -290,12 +291,14 @@ class ViewJournalEntriesDialog(QDialog):
                     item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, col, item)
 
-    def _selected_index(self) -> int:
+    def _selected_indices(self) -> list[int]:
         sel = self.table.selectionModel().selectedRows()
-        if not sel:
-            return -1
-        r = sel[0].row()
-        return r if 0 <= r < len(self._entries) else -1
+        rows = sorted({i.row() for i in sel if i and i.row() >= 0})
+        return [r for r in rows if r < len(self._entries)]
+
+    def _selected_index(self) -> int:
+        rows = self._selected_indices()
+        return rows[0] if rows else -1
 
     def _selected_entry(self) -> JournalEntry | None:
         i = self._selected_index()
@@ -349,22 +352,27 @@ class ViewJournalEntriesDialog(QDialog):
         dlg.exec()
 
     def _delete_selected(self):
-        entry = self._selected_entry()
-        if not entry:
+        rows = self._selected_indices()
+        if not rows:
             return
 
+        to_delete = [self._entries[r] for r in rows]
+        msg = "Delete the selected entr{}?\n\n{}\n\nThis cannot be undone.".format(
+            "y" if len(to_delete) == 1 else "ies",
+            "\n".join(e.entry_date for e in to_delete[:12]) + ("" if len(to_delete) <= 12 else "\n…"),
+        )
         ok = QMessageBox.question(
             self,
             "Delete entry?",
-            f"Delete this entry?\n\n{entry.entry_date}\n\nThis cannot be undone.",
+            msg,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if ok != QMessageBox.Yes:
             return
 
-        # delete by date key (JJ enforces one entry per date)
-        new_entries = [e for e in self._entries if e.entry_date != entry.entry_date]
+        delete_dates = {e.entry_date for e in to_delete}  # JJ enforces one entry per date
+        new_entries = [e for e in self._entries if e.entry_date not in delete_dates]
         if len(new_entries) == len(self._entries):
             QMessageBox.warning(self, "Not found", "Could not find the selected entry (it may have changed).")
             self._refresh()
@@ -378,7 +386,7 @@ class ViewJournalEntriesDialog(QDialog):
             QMessageBox.critical(self, "Delete failed", f"Could not write:\n{self._data_path}\n\n{e}")
             return
 
-        QMessageBox.information(self, "Deleted", "Entry deleted.")
+        QMessageBox.information(self, "Deleted", f"Deleted {len(delete_dates)} entr{('y' if len(delete_dates)==1 else 'ies')}.")
         self._refresh()
 
 # -----------------------------
@@ -442,17 +450,32 @@ class HRTJournalWindow(QMainWindow):
         self.date_edit.setCalendarPopup(True)
 
         self.mood_combo = QComboBox()
+        self.mood_combo.addItem("(none)")  # allow empty mood, matches README behavior
         self.mood_combo.addItems(["Great", "Good", "Okay", "Low", "Rough"])
 
-        self.symptom_combo = QComboBox()
-        self.symptom_combo.addItems([
-            "None",
+        # Replace single-select symptoms combobox w/ multi-select checkboxes
+        self.symptoms_group = QGroupBox()
+        self.symptoms_group.setFlat(True)
+        symptoms_layout = QVBoxLayout(self.symptoms_group)
+        symptoms_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._symptom_checks: list[QCheckBox] = []
+        for label in [
             "Mood swings",
             "Cramps",
             "Fatigue",
             "Breast tenderness",
             "Headache",
-        ])
+        ]:
+            cb = QCheckBox(label)
+            self._symptom_checks.append(cb)
+            symptoms_layout.addWidget(cb)
+        symptoms_layout.addStretch(1)
+
+        self.symptoms_clear_btn = QPushButton("Clear symptoms")
+        self.symptoms_clear_btn.setAutoDefault(False)
+        self.symptoms_clear_btn.clicked.connect(lambda: [cb.setChecked(False) for cb in self._symptom_checks])
+        symptoms_layout.addWidget(self.symptoms_clear_btn)
 
         self.emotional_combo = QComboBox()
         self.emotional_combo.addItems([
@@ -489,7 +512,7 @@ class HRTJournalWindow(QMainWindow):
 
         form_layout.addRow("Date:", self.date_edit)
         form_layout.addRow("Mood:", self.mood_combo)
-        form_layout.addRow("Symptoms:", self.symptom_combo)
+        form_layout.addRow("Symptoms:", self.symptoms_group)
         form_layout.addRow("Emotional shifts:", self.emotional_combo)
         form_layout.addRow("Pain / discomfort:", self.pain_combo)
         form_layout.addRow("Libido / arousal:", self.libido_combo)
@@ -662,15 +685,17 @@ class HRTJournalWindow(QMainWindow):
         return -1
 
     def add_entry(self):
-        selected = self.symptom_combo.currentText()
-        symptoms = [] if selected == "None" else [selected]
+        symptoms = [cb.text() for cb in self._symptom_checks if cb.isChecked()]
 
         entry_date = self.date_edit.date().toString("yyyy-MM-dd")
         mood = self.mood_combo.currentText()
+        if mood == "(none)":
+            mood = ""
+
         notes = self.notes_edit.toPlainText().strip()
 
         # Basic validation (avoid saving empty rows)
-        if mood in ("", "None") and not notes:
+        if not mood and not notes:
             QMessageBox.warning(self, "Missing info", "Add notes and/or select a mood before saving.")
             return
 
@@ -704,11 +729,14 @@ class HRTJournalWindow(QMainWindow):
 
         self._set_status_text_animated("Saved.", 2000)
 
-        self.symptom_combo.setCurrentIndex(0)
+        # reset form
+        for cb in self._symptom_checks:
+            cb.setChecked(False)
         self.emotional_combo.setCurrentIndex(0)
         self.pain_combo.setCurrentIndex(0)
         self.libido_combo.setCurrentIndex(0)
         self.notes_edit.clear()
+        self.mood_combo.setCurrentIndex(0)
 
     def delete_selected(self):
         sel = self.table.selectionModel()

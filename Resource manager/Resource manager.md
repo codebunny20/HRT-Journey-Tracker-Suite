@@ -14,6 +14,7 @@ A small desktop app (PySide6 / Qt) for saving, searching, and quickly opening us
 - **Clear all** saved links (with confirmation)
 - Right‑click context menu on list items: **Open / Copy URL / Remove**
 - Double‑click a list item to **Open**
+- **New:** improved bundling notes + troubleshooting (see below)
 
 ## How to use
 
@@ -109,8 +110,31 @@ Try adding hidden imports:
 py -m PyInstaller --noconfirm --onefile --windowed --name "ResourceManager" --hidden-import data.ui_main --hidden-import data.storage .\main.py
 ```
 
+### If Qt/PySide6 plugins are missing at runtime
+If you see errors about platform plugins (e.g. `qwindows.dll`) or Qt plugin loading, try:
+
+- Ensure you’re building from an activated venv where **PySide6 is installed**
+- Upgrade build tooling:
+
+```powershell
+py -m pip install -U pyinstaller PySide6
+```
+
+If needed, use PyInstaller’s collect-all for PySide6:
+
+```powershell
+py -m PyInstaller --noconfirm --onefile --windowed --name "ResourceManager" --collect-all PySide6 .\main.py
+```
+
+(Only add `--collect-all PySide6` if you actually hit plugin/runtime errors; it increases bundle size.)
+
 ## Notes / behavior
 
 - URL validation is basic and intended to prevent obvious invalid inputs.
 - Status text updates at the bottom after actions (added/removed/opened/copied, etc.).
 - The list shows items using two lines for readability: title then URL.
+
+## New in latest version
+
+- Documentation updates to reflect recent additions and packaging troubleshooting.
+- Expanded PyInstaller guidance for common `data.*` import and Qt plugin issues.
