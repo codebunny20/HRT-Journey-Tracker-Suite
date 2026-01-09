@@ -1,75 +1,66 @@
-# Resource Manager (Link Manager)
+# Resource Manager (`main.py`) — Link Manager
 
-A small desktop app (PySide6 / Qt) for saving, searching, and quickly opening useful links/resources. It’s designed to help you keep a curated list of URLs with titles, then open/copy/remove them in a couple clicks.
+A small PySide6 (Qt) desktop app for saving, searching, and quickly opening useful links/resources. It stores **Title + URL** records locally, provides fast filtering, and supports open/copy/remove workflows.
 
-## What it does
+---
 
-- Save a **Title + URL** as a “resource”
-- View resources in a list (title on the first line, URL on the second line)
-- **Search/filter** the list by typing (matches title or URL)
-- **Open** the selected link in your default browser
-- **Copy** the selected link’s URL to the clipboard
-- **Remove** a selected link (with confirmation)
-- **Clear inputs** (title/url fields)
-- **Clear all** saved links (with confirmation)
-- Right‑click context menu on list items: **Open / Copy URL / Remove**
-- Double‑click a list item to **Open**
-- **New:** improved bundling notes + troubleshooting (see below)
+## Data storage (where + format)
 
-## How to use
+- Persisted via: `data.storage.LinkStorage`
+- Format: a local on-disk store of “resource” records (each record includes at least `title` and `url`).
+- Exact location/filename:
+  - defined by `LinkStorage` (see `data/storage.py`).
+- Saves occur after add/remove/clear operations; loads at startup.
 
-### Add a link
-1. Type a **Title** (required)
-2. Type a **URL** (required)
-   - If you enter `example.com` it will be normalized to `https://example.com`
-   - Only `http://` and `https://` URLs are accepted
-3. Click **Add** (or press Enter in either input)
+---
 
-### Search
-- Type into the **Search** box to filter results instantly.
-- Search is case-insensitive and matches against both the title and URL.
+## Entry schema (what gets saved)
 
-### Open / Copy
-- Select an item in the list
-- Click:
-  - **Open** to open it in your web browser
-  - **Copy URL** to copy it to your clipboard
-- You can also:
-  - **Double-click** an item to open it
-  - **Right-click** an item for the context menu
-
-### Remove
-- Select an item
-- Click **Remove**
-- Confirm the dialog to delete it
-
-### Clear inputs / Clear all
-- **Clear Inputs**: clears the Title/URL text boxes.
-- **Clear All**: deletes every saved link (cannot be undone).
-
-## Data/storage
-
-The app uses a storage helper (`data.storage.LinkStorage`) to persist your saved links locally.
-
-- Each stored entry is a small record with keys like:
-  - `title`
-  - `url`
-- Links are loaded at startup and saved when you add/remove/clear.
-- The exact storage location/filename is defined by `LinkStorage` (see `data/storage.py`).
-
-## Requirements
-
-- Python 3.x
-- PySide6
-
-Install dependencies (recommended inside a virtual environment):
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-py -m pip install -U pip
-py -m pip install PySide6
+```json
+{
+  "title": "Some resource",
+  "url": "https://example.com"
+}
 ```
+
+Rules:
+- **Title** is required.
+- **URL** is required.
+- URL normalization:
+  - `example.com` becomes `https://example.com`
+- Only `http://` and `https://` URLs are accepted (basic validation).
+
+---
+
+## UI: what the user does
+
+### Main window
+1. Enter **Title** and **URL**.
+2. Click **Add** (or press Enter in either field).
+3. Use **Search** to filter items instantly (case-insensitive; matches title or URL).
+4. Select a list item and use:
+   - **Open** (default browser)
+   - **Copy URL** (clipboard)
+   - **Remove** (with confirmation)
+5. Optional conveniences:
+   - Double-click an item to **Open**
+   - Right-click a list item for context menu (**Open / Copy URL / Remove**)
+   - **Clear Inputs** resets title/url fields
+   - **Clear All** deletes everything (with confirmation)
+
+List presentation:
+- Two-line items for readability:
+  - title on first line, URL on second line.
+
+---
+
+## Key components (how it’s built)
+
+- Storage: `data.storage.LinkStorage` (load/save)
+- Filtering: search box filters against both title and URL (case-insensitive)
+- Actions update a status label after operations (added/removed/opened/copied)
+
+---
 
 ## Run from source
 
@@ -78,6 +69,21 @@ From the `Resource manager` folder:
 ```powershell
 py .\main.py
 ```
+
+Requirements:
+- Python 3.x
+- PySide6
+
+Install (recommended in a venv):
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+py -m pip install -U pip
+py -m pip install PySide6
+```
+
+---
 
 ## Build as a Windows EXE (PyInstaller)
 
@@ -97,44 +103,31 @@ Output:
 - `.\dist\ResourceManager.exe`
 
 ### If the EXE doesn’t start (debug build)
-Build with console enabled so you can see error output:
+Use console mode to see errors:
 
 ```powershell
 py -m PyInstaller --noconfirm --onefile --console --name "ResourceManager" .\main.py
 ```
 
 ### If imports under `data.*` fail when bundled
-Try adding hidden imports:
+Add hidden imports:
 
 ```powershell
 py -m PyInstaller --noconfirm --onefile --windowed --name "ResourceManager" --hidden-import data.ui_main --hidden-import data.storage .\main.py
 ```
 
 ### If Qt/PySide6 plugins are missing at runtime
-If you see errors about platform plugins (e.g. `qwindows.dll`) or Qt plugin loading, try:
-
-- Ensure you’re building from an activated venv where **PySide6 is installed**
-- Upgrade build tooling:
+- Build from an activated venv where PySide6 is installed.
+- Upgrade tooling:
 
 ```powershell
 py -m pip install -U pyinstaller PySide6
 ```
 
-If needed, use PyInstaller’s collect-all for PySide6:
+If needed, collect PySide6:
 
 ```powershell
 py -m PyInstaller --noconfirm --onefile --windowed --name "ResourceManager" --collect-all PySide6 .\main.py
 ```
 
-(Only add `--collect-all PySide6` if you actually hit plugin/runtime errors; it increases bundle size.)
-
-## Notes / behavior
-
-- URL validation is basic and intended to prevent obvious invalid inputs.
-- Status text updates at the bottom after actions (added/removed/opened/copied, etc.).
-- The list shows items using two lines for readability: title then URL.
-
-## New in latest version
-
-- Documentation updates to reflect recent additions and packaging troubleshooting.
-- Expanded PyInstaller guidance for common `data.*` import and Qt plugin issues.
+(Only use `--collect-all PySide6` if you hit plugin/runtime errors; it increases bundle size.)
