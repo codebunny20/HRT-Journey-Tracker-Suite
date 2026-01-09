@@ -3,3 +3,5 @@ numpy>=1.23
 sounddevice>=0.4
 soundfile>=0.12
 aubio>=0.4
+astapi>=0.110
+uvicorn[standard]>=0.27

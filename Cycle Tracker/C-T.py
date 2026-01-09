@@ -5,7 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QDate, QSize, QEvent
+from PySide6.QtCore import Qt, QDate, QSize, QEvent, QSettings
 from PySide6.QtGui import QAction, QShortcut, QKeySequence, QColor, QBrush
 from PySide6.QtWidgets import (
     QApplication,
@@ -305,6 +305,54 @@ def _apply_intensity_style(item: QTableWidgetItem, intensity: str) -> None:
     item.setBackground(QBrush(QColor(palette["bg"])))
     item.setForeground(QBrush(QColor(palette["fg"])))
 
+ORG_NAME = "HRTJourneyTracker"
+APP_NAME = "Cycle Tracker"
+SETTINGS_THEME_KEY = "ui/theme"  # "dark" | "light"
+THEME_DARK = "dark"
+THEME_LIGHT = "light"
+
+DARK_QSS = """
+QWidget { background: #121212; color: #eaeaea; }
+QToolTip { background: #111315; color: #E6E6E6; border: 1px solid #2A2E33; }
+QFrame#SummaryCard { background: #15181B; border: 1px solid #2A2E33; border-radius: 10px; padding: 12px; }
+QTableWidget { background: #141414; gridline-color: #2A2E33; alternate-background-color: #171717; }
+QHeaderView::section { background: #1b1b1b; color: #eaeaea; padding: 6px; font-weight: 600; border: 0px; }
+QToolBar { background: transparent; border: 0px; }
+QPushButton { background: #232323; border: 1px solid #2f2f2f; padding: 6px 10px; border-radius: 8px; }
+QPushButton:hover { background: #2a2a2a; }
+QPushButton:pressed { background: #1f1f1f; }
+QPushButton#QuickAddFab { border-radius: 22px; font-size: 22px; font-weight: 700; padding: 0px; }
+"""
+
+LIGHT_QSS = """
+QWidget { background: #F6F7F9; color: #1B1F24; }
+QToolTip { background: #FFFFFF; color: #1B1F24; border: 1px solid #D6DAE0; }
+QFrame#SummaryCard { background: #FFFFFF; border: 1px solid #D6DAE0; border-radius: 10px; padding: 12px; }
+QTableWidget { background: #ffffff; gridline-color: #dedede; alternate-background-color: #f6f6f6; }
+QHeaderView::section { background: #efefef; color: #111; padding: 6px; font-weight: 600; border: 0px; }
+QToolBar { background: transparent; border: 0px; }
+QPushButton { background: #ffffff; border: 1px solid #cfcfcf; padding: 6px 10px; border-radius: 8px; }
+QPushButton:hover { background: #f0f0f0; }
+QPushButton:pressed { background: #e6e6e6; }
+QPushButton#QuickAddFab { border-radius: 22px; font-size: 22px; font-weight: 700; padding: 0px; }
+"""
+
+def _load_theme() -> str:
+    s = QSettings(ORG_NAME, APP_NAME)
+    t = str(s.value(SETTINGS_THEME_KEY, THEME_DARK) or THEME_DARK).strip().lower()
+    return t if t in (THEME_DARK, THEME_LIGHT) else THEME_DARK
+
+def _apply_app_theme(theme: str, persist: bool = False) -> str:
+    t = (theme or "").strip().lower()
+    if t not in (THEME_DARK, THEME_LIGHT):
+        t = THEME_DARK
+    app = QApplication.instance()
+    if app is not None:
+        app.setStyleSheet(DARK_QSS if t == THEME_DARK else LIGHT_QSS)
+    if persist:
+        QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_THEME_KEY, t)
+    return t
+
 class CycleTrackerWindow(QMainWindow):
     def __init__(self, storage, parent=None):
         super().__init__(parent)
@@ -314,6 +362,9 @@ class CycleTrackerWindow(QMainWindow):
         # guard flags for theming recursion
         self._applying_theme = False
         self._last_theme_sig = None
+
+        # prefer shared theme over system heuristic
+        self._theme = _load_theme()
 
         self.setWindowTitle("Cycle Log")
         self.resize(900, 600)
@@ -637,6 +688,14 @@ class CycleTrackerWindow(QMainWindow):
             return
         self._applying_theme = True
         try:
+            # use shared theme if set; fallback to system heuristic
+            theme = getattr(self, "_theme", None) or _load_theme()
+            if theme in (THEME_DARK, THEME_LIGHT):
+                _apply_app_theme(theme, persist=False)
+                # keep signature stable
+                self._last_theme_sig = ("fixed", theme)
+                return
+
             pal = self.palette()
             window_bg = pal.window().color()
 
@@ -664,7 +723,6 @@ class CycleTrackerWindow(QMainWindow):
                 alt_row = "#fafcff"
                 grid = "#d0d7e2"
 
-            # Avoid global QWidget { color: ... } (can break palette/disabled colors)
             self.setStyleSheet(f"""
                 QFrame#SummaryCard {{
                     background: {card_bg};
@@ -751,6 +809,11 @@ class CycleTrackerWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("HRT Journey Cycle Tracker")
+
+    # align QSettings identity with other apps + apply shared theme
+    app.setOrganizationName(ORG_NAME)
+    app.setApplicationName(APP_NAME)
+    _apply_app_theme(_load_theme(), persist=False)
 
     storage = CycleStorage()
     window = CycleTrackerWindow(storage)
