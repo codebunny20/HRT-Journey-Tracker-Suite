@@ -1,0 +1,7 @@
+{
+  "default_input_device_index": 1,
+  "autorefresh_devices": true,
+  "default_voice_note_duration_sec": 10,
+  "countdown_enabled": true,
+  "countdown_seconds": 5
+}
