@@ -67,3 +67,7 @@ From **View entries → Export…**:
 - `.json` (array)
 - `.txt` (human-readable)
 - `.md` (markdown)
+
+---
+
+# More detailed info and explanations

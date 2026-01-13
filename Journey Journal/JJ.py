@@ -572,6 +572,17 @@ class HRTJournalWindow(QMainWindow):
 
         tabs.addTab(entries_tab, "Entries")
 
+        # -----------------------------
+        # Tab 3: Voice journal
+        # -----------------------------
+        voice_tab = QWidget()
+        voice_layout = QVBoxLayout(voice_tab)
+
+        voice_layout.addWidget(QLabel("Voice journal tab (coming soon)."))
+        voice_layout.addStretch(1)
+
+        tabs.addTab(voice_tab, "Voice journal")
+
         self.setCentralWidget(main)
         self.resize(950, 700)
 
